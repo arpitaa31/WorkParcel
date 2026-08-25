@@ -3,14 +3,61 @@
     x:Class="WorkParcel_App.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:WorkParcel_App">
+    RequestedTheme="Dark">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
-                <!-- Other merged dictionaries here -->
             </ResourceDictionary.MergedDictionaries>
-            <!-- Other app resources here -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <SolidColorBrush x:Key="AppBackgroundBrush" Color="#F4F6F7" />
+                    <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFF" />
+                    <SolidColorBrush x:Key="SubtleSurfaceBrush" Color="#E9EEF0" />
+                    <SolidColorBrush x:Key="BorderBrush" Color="#CAD3D7" />
+                    <SolidColorBrush x:Key="PrimaryTextBrush" Color="#172126" />
+                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#5B6A70" />
+                    <SolidColorBrush x:Key="AccentBrush" Color="#167A5D" />
+                    <SolidColorBrush x:Key="AccentSoftBrush" Color="#D8EFE5" />
+                    <SolidColorBrush x:Key="WarningBrush" Color="#A76500" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="AppBackgroundBrush" Color="#0B0E10" />
+                    <SolidColorBrush x:Key="SurfaceBrush" Color="#111619" />
+                    <SolidColorBrush x:Key="SubtleSurfaceBrush" Color="#182024" />
+                    <SolidColorBrush x:Key="BorderBrush" Color="#2A353A" />
+                    <SolidColorBrush x:Key="PrimaryTextBrush" Color="#E5EDF0" />
+                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="#8D9CA2" />
+                    <SolidColorBrush x:Key="AccentBrush" Color="#9BE28F" />
+                    <SolidColorBrush x:Key="AccentSoftBrush" Color="#1D352C" />
+                    <SolidColorBrush x:Key="WarningBrush" Color="#F0B45B" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="AppBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="SurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="SubtleSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+                    <SolidColorBrush x:Key="BorderBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="PrimaryTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="SecondaryTextBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+                    <SolidColorBrush x:Key="AccentBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="AccentSoftBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                    <SolidColorBrush x:Key="WarningBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+            <Style TargetType="Button">
+                <Setter Property="CornerRadius" Value="2" />
+                <Setter Property="Padding" Value="12,7" />
+                <Setter Property="FontSize" Value="12" />
+            </Style>
+            <Style TargetType="TextBox">
+                <Setter Property="CornerRadius" Value="2" />
+                <Setter Property="Padding" Value="10,7" />
+                <Setter Property="FontSize" Value="12" />
+            </Style>
+            <Style TargetType="ComboBox">
+                <Setter Property="CornerRadius" Value="2" />
+                <Setter Property="FontSize" Value="12" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

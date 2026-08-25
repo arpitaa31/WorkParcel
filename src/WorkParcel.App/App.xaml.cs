@@ -10,6 +10,7 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
+using WorkParcel_App.Services;
 
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -22,6 +23,7 @@ namespace WorkParcel_App;
 public partial class App : Application
 {
     private Window? _window;
+    public Window? MainWindow => _window;
     
     /// <summary>
     /// Initializes the singleton application object.  This is the first line of authored code
@@ -36,9 +38,13 @@ public partial class App : Application
     /// Invoked when the application is launched.
     /// </summary>
     /// <param name="args">Details about the launch request and process.</param>
-    protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
+    protected override async void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
-        _window = new MainWindow();
+        string? startupError = null;
+        try { await WorkspaceStore.Current.InitializeAsync(); }
+        catch (DatabaseStartupException exception) { startupError = exception.Message; }
+        catch (Exception exception) { startupError = "WorkParcel could not finish starting. Your local data was not deleted."; new AppLogger(new AppDataPaths()).Error("Unexpected startup failure", exception); }
+        _window = new MainWindow(startupError);
         _window.Activate();
     }
 }

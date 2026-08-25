@@ -3,63 +3,30 @@ bin/
 obj/
 artifacts/
 
-# User-specific files
+# User and IDE state
+.vs/
 *.user
 *.suo
-*.userosscache
-*.sln.docstates
-
-# Visual Studio
-.vs/
-
-# VS Code local settings
 .vscode/*
 !.vscode/extensions.json
-!.vscode/launch.json
-!.vscode/tasks.json
-!.vscode/settings.json
 
-# Build packages
+# Packages and test output
 *.nupkg
 *.snupkg
-AppPackages/
-BundleArtifacts/
-Package.StoreAssociation.xml
-_pkginfo.txt
-
-# Test output
 TestResults/
 coverage/
-coverage.*
-*.coverage
-*.coveragexml
 
-# Logs and temporary files
-*.log
-*.tmp
-*.temp
-~$*
-Thumbs.db
-Desktop.ini
-
-# Local databases and app data
+# Local WorkParcel data and logs
 *.db
 *.db-shm
 *.db-wal
 *.sqlite
 *.sqlite3
-
-# Environment and secrets
-.env
-.env.*
-!.env.example
-secrets.json
-appsettings.Local.json
-
-# Node/browser extension dependencies
-node_modules/
-dist/
-build/
+*.sqlite-shm
+*.sqlite-wal
+*.db.bak
+*.log
 
 # OS files
-.DS_Store
+Thumbs.db
+Desktop.ini

@@ -1,5 +1,9 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/WorkParcel.App/WorkParcel.App.csproj" />
+    <Project Path="src/WorkParcel.Core/WorkParcel.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/WorkParcel.Tests/WorkParcel.Tests.csproj" />
   </Folder>
 </Solution>

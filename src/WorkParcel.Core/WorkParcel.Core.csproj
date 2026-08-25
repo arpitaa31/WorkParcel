@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\WorkParcel.App\Models\WorkModels.cs" Link="Models\WorkModels.cs" />
+    <Compile Include="..\WorkParcel.App\Services\AppDataPaths.cs" Link="Services\AppDataPaths.cs" />
+    <Compile Include="..\WorkParcel.App\Services\AppLogger.cs" Link="Services\AppLogger.cs" />
+    <Compile Include="..\WorkParcel.App\Services\SqliteDatabase.cs" Link="Services\SqliteDatabase.cs" />
+    <Compile Include="..\WorkParcel.App\Services\WorkspaceRepository.cs" Link="Services\WorkspaceRepository.cs" />
+    <Compile Include="..\WorkParcel.App\Services\WorkspaceStore.cs" Link="Services\WorkspaceStore.cs" />
+    <Compile Include="..\WorkParcel.App\Services\ParcelQueries.cs" Link="Services\ParcelQueries.cs" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+  </ItemGroup>
+</Project>

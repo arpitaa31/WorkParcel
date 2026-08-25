@@ -12,16 +12,19 @@ namespace WorkParcel_App;
 /// </summary>
 public sealed partial class MainWindow : Window
 {
-    public MainWindow()
+    public MainWindow(string? startupError = null)
     {
         InitializeComponent();
 
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
 
-        AppWindow.SetIcon("Assets/AppIcon.ico");
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico");
+        if (File.Exists(iconPath)) AppWindow.SetIcon(iconPath);
 
-        // Navigate the root frame to the main page on startup.
-        RootFrame.Navigate(typeof(MainPage));
+        AppWindow.Resize(new Windows.Graphics.SizeInt32(1280, 720));
+
+        if (string.IsNullOrWhiteSpace(startupError)) RootFrame.Navigate(typeof(MainPage));
+        else RootFrame.Content = new Microsoft.UI.Xaml.Controls.StackPanel { Padding = new Microsoft.UI.Xaml.Thickness(48), Spacing = 12, Children = { new Microsoft.UI.Xaml.Controls.TextBlock { Text = "WorkParcel could not start", FontSize = 28, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold }, new Microsoft.UI.Xaml.Controls.TextBlock { Text = startupError, TextWrapping = Microsoft.UI.Xaml.TextWrapping.Wrap, FontSize = 15 } } };
     }
 }
