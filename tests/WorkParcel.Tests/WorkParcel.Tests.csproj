@@ -14,6 +14,24 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\src\WorkParcel.Core\WorkParcel.Core.csproj" />
+    <!-- Keep the test process independent from the unsigned aggregation DLL
+         on managed machines with Application Control. These are the same
+         production source files used by WorkParcel.Core. -->
+    <Compile Include="..\..\src\WorkParcel.Core\BrowserProtocol.cs" Link="Core\BrowserProtocol.cs" />
+    <Compile Include="..\..\src\WorkParcel.Core\BrowserTabRules.cs" Link="Core\BrowserTabRules.cs" />
+    <Compile Include="..\..\src\WorkParcel.Core\BrowserRestorePlanner.cs" Link="Core\BrowserRestorePlanner.cs" />
+    <Compile Include="..\..\src\WorkParcel.Core\BrowserClosePlanner.cs" Link="Core\BrowserClosePlanner.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Models\WorkModels.cs" Link="Models\WorkModels.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\AppDataPaths.cs" Link="Services\AppDataPaths.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\AppLogger.cs" Link="Services\AppLogger.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\SqliteDatabase.cs" Link="Services\SqliteDatabase.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\WorkspaceRepository.cs" Link="Services\WorkspaceRepository.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\WorkspaceStore.cs" Link="Services\WorkspaceStore.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\BrowserIntegrationService.cs" Link="Services\BrowserIntegrationService.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\ParcelQueries.cs" Link="Services\ParcelQueries.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\ParcelItemServices.cs" Link="Services\ParcelItemServices.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\WindowsWorkspaceServices.cs" Link="Services\WindowsWorkspaceServices.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\ParcelItemQueries.cs" Link="Services\ParcelItemQueries.cs" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
   </ItemGroup>
 </Project>

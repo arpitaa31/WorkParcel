@@ -9,6 +9,8 @@ public sealed class AppDataPaths
         DatabasePath = Path.Combine(DataDirectory, "workparcel.db");
         LogDirectory = Path.Combine(RootDirectory, "Logs");
         LogPath = Path.Combine(LogDirectory, "workparcel.log");
+        CacheDirectory = Path.Combine(RootDirectory, "Cache");
+        IconCacheDirectory = Path.Combine(CacheDirectory, "Icons");
     }
 
     public string RootDirectory { get; }
@@ -16,10 +18,13 @@ public sealed class AppDataPaths
     public string DatabasePath { get; }
     public string LogDirectory { get; }
     public string LogPath { get; }
+    public string CacheDirectory { get; }
+    public string IconCacheDirectory { get; }
 
     public void EnsureDirectories()
     {
         Directory.CreateDirectory(DataDirectory);
         Directory.CreateDirectory(LogDirectory);
+        Directory.CreateDirectory(IconCacheDirectory);
     }
 }

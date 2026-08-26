@@ -16,9 +16,11 @@ public sealed partial class ParcelsPage : PageBase
     private readonly ComboBox _filter = new() { MinWidth = 110, ItemsSource = new[] { "All", "Open", "Packed" }, SelectedIndex = 0 };
     private readonly ComboBox _sort = new() { MinWidth = 155, ItemsSource = new[] { "Recently used", "Recently updated", "Name", "Date created" }, SelectedIndex = 0 };
     private string _filterText = "All";
+    private int _searchVersion;
 
     public ParcelsPage()
     {
+        Ui.Interactive(_search, 1.005f); Ui.Interactive(_filter, 1.01f); Ui.Interactive(_sort, 1.01f);
         var clearFilters = Ui.Button("CLEAR FILTERS"); clearFilters.Click += (_, _) => { _search.Text = string.Empty; _filter.SelectedIndex = 0; _sort.SelectedIndex = 0; };
         var localStatus = Ui.Mono("LOCAL / READY", 10, "#9BE28F", true);
         localStatus.VerticalAlignment = VerticalAlignment.Center;
@@ -28,11 +30,16 @@ public sealed partial class ParcelsPage : PageBase
         body.Children.Add(BuildFilters(clearFilters, localStatus));
         body.Children.Add(Ui.Rule());
         body.Children.Add(_rows);
-        _search.TextChanged += (_, _) => Refresh();
+        _search.TextChanged += (_, _) => QueueSearchRefresh();
         _filter.SelectionChanged += (_, _) => { _filterText = _filter.SelectedItem?.ToString() ?? "All"; Refresh(); };
         _sort.SelectionChanged += (_, _) => Refresh();
         SetContent(body);
         Refresh();
+    }
+
+    private async void QueueSearchRefresh()
+    {
+        var version = ++_searchVersion; await Task.Delay(180); if (version == _searchVersion) Refresh();
     }
 
     private Grid BuildHeader()
@@ -46,7 +53,7 @@ public sealed partial class ParcelsPage : PageBase
         copy.Children.Add(Ui.Text("Save a setup. Open it whenever you return.", 12, false, "#8D9CA2"));
         header.Children.Add(copy);
 
-        var newParcel = Ui.Button("+ NEW PARCEL  ▾");
+        var newParcel = Ui.Button("+ NEW PARCEL  \u25BE");
         newParcel.HorizontalAlignment = HorizontalAlignment.Right;
         newParcel.VerticalAlignment = VerticalAlignment.Top;
         newParcel.Padding = new Thickness(13, 8, 13, 8);
@@ -84,8 +91,8 @@ public sealed partial class ParcelsPage : PageBase
 
         capture.Click += (_, _) => { flyout.Hide(); Frame?.Navigate(typeof(CapturePage)); };
         create.Click += async (_, _) => { flyout.Hide(); await CreateEmptyAsync(); };
-        capture.KeyDown += (_, args) => MoveMenuFocus(args, capture, create, flyout);
-        create.KeyDown += (_, args) => MoveMenuFocus(args, capture, create, flyout);
+        capture.KeyDown += (sender, args) => MoveMenuFocus(args, (Button)sender, capture, create, flyout);
+        create.KeyDown += (sender, args) => MoveMenuFocus(args, (Button)sender, capture, create, flyout);
         flyout.Opened += (_, _) => capture.Focus(FocusState.Programmatic);
         return flyout;
     }
@@ -119,14 +126,15 @@ public sealed partial class ParcelsPage : PageBase
             UseSystemFocusVisuals = true
         };
         AutomationProperties.SetName(option, $"{title}. {subtitle}{(recommended ? ". Recommended" : string.Empty)}");
-        return option;
+        return Ui.Interactive(option, 1.015f);
     }
 
-    private static void MoveMenuFocus(KeyRoutedEventArgs args, Button first, Button last, Flyout flyout)
+    private static void MoveMenuFocus(KeyRoutedEventArgs args, Button current, Button first, Button last, Flyout flyout)
     {
         if (args.Key is VirtualKey.Down or VirtualKey.Up)
         {
-            (args.Key == VirtualKey.Down ? last : first).Focus(FocusState.Keyboard);
+            var next = current == first ? last : first;
+            next.Focus(FocusState.Keyboard);
             args.Handled = true;
         }
         else if (args.Key == VirtualKey.Escape)
@@ -208,7 +216,7 @@ public sealed partial class ParcelsPage : PageBase
         var list = ParcelQueries.Apply(Store.Parcels, new ParcelQueryOptions(_search.Text, status, sort));
         if (list.Count == 0)
         {
-            var empty = Ui.Stack(9); empty.Children.Add(Ui.Mono(string.IsNullOrWhiteSpace(_search.Text) && _filterText == "All" ? "NO PARCELS YET" : "NO MATCHES", 12, "#9BE28F", true)); empty.Children.Add(Ui.Text(string.IsNullOrWhiteSpace(_search.Text) && _filterText == "All" ? "Create an empty parcel or open the capture preview to begin." : "Try a different search or clear the filters.", 13, false, "#8D9CA2"));
+            var empty = Ui.Stack(9); empty.Children.Add(Ui.Mono(string.IsNullOrWhiteSpace(_search.Text) && _filterText == "All" ? "NO PARCELS YET" : "NO MATCHES", 12, "#9BE28F", true)); empty.Children.Add(Ui.Text(string.IsNullOrWhiteSpace(_search.Text) && _filterText == "All" ? "Capture open windows or create a blank parcel to begin." : "Try a different search or clear the filters.", 13, false, "#8D9CA2"));
             var clear = Ui.Button("CLEAR FILTERS"); clear.Click += (_, _) => { _search.Text = string.Empty; _filter.SelectedIndex = 0; _sort.SelectedIndex = 0; }; empty.Children.Add(clear); _rows.Children.Add(Ui.Card(empty, 22)); return;
         }
         foreach (var parcel in list) _rows.Children.Add(Row(parcel));
@@ -217,8 +225,8 @@ public sealed partial class ParcelsPage : PageBase
     private Border Row(Parcel parcel)
     {
         var copy = Ui.Stack(3); copy.Children.Add(Ui.Text(parcel.Name, 14, true)); copy.Children.Add(Ui.Text(string.IsNullOrWhiteSpace(parcel.Description) ? "No description" : parcel.Description, 11, false, "#8D9CA2"));
-        var meta = Ui.Stack(3); meta.Children.Add(Ui.Mono("0 ITEMS", 10, "#9BE28F", true)); meta.Children.Add(Ui.Mono($"UPDATED {Ui.Relative(parcel.UpdatedAt)}", 10));
-        var action = Ui.Button(parcel.Status == ParcelStatus.Open ? "PACK AWAY" : "OPEN PARCEL", parcel.Status == ParcelStatus.Open); action.Click += async (_, _) => { await Dialogs.ShowStateChangeAsync(this, parcel); Refresh(); };
+        var meta = Ui.Stack(3); meta.Children.Add(Ui.Mono(parcel.ItemSummary, 10, "#9BE28F", true)); meta.Children.Add(Ui.Mono($"UPDATED {Ui.Relative(parcel.UpdatedAt)}", 10));
+        var action = Ui.Button(parcel.Status == ParcelStatus.Open ? "PACK AWAY" : "OPEN PARCEL", parcel.Status == ParcelStatus.Open); action.Click += (_, _) => Frame?.Navigate(typeof(ParcelDetailsPage), new ParcelDetailsRequest(parcel.Id, true));
         var more = Ui.IconButton("…", "Parcel actions"); var menu = new MenuFlyout();
         var openDetails = new MenuFlyoutItem { Text = "Open details" }; openDetails.Click += (_, _) => Frame?.Navigate(typeof(ParcelDetailsPage), parcel.Id);
         var edit = new MenuFlyoutItem { Text = "Edit parcel" }; edit.Click += async (_, _) => { await Dialogs.ShowEditParcelAsync(this, parcel); Refresh(); };
@@ -227,6 +235,6 @@ public sealed partial class ParcelsPage : PageBase
         var row = Ui.Row(copy, meta, Ui.Spacer(), Ui.Tag(parcel.StatusText, Ui.StateColor(parcel.Status)), action, more); row.VerticalAlignment = VerticalAlignment.Center;
         var border = new Border { Child = row, Padding = new Thickness(10, 8, 8, 8), BorderBrush = Ui.Resource("BorderBrush"), BorderThickness = new Thickness(0, 0, 0, 1), Background = Ui.Resource("SurfaceBrush") };
         border.Tapped += (_, _) => Frame?.Navigate(typeof(ParcelDetailsPage), parcel.Id);
-        return border;
+        return Ui.Interactive(border);
     }
 }

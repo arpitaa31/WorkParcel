@@ -49,7 +49,7 @@ public sealed partial class TodayPage : PageBase
         var input = new TextBox { Text = task.Text, MaxLength = 200, Header = "TASK" }; var parcelPicker = ParcelPicker(task.ParcelId);
         var content = Ui.Stack(10); content.Children.Add(input); content.Children.Add(new TextBlock { Text = "LINK TO PARCEL — OPTIONAL", Foreground = Ui.Resource("SecondaryTextBrush"), FontSize = 11 }); content.Children.Add(parcelPicker);
         var dialog = new ContentDialog { Title = "EDIT TODAY ITEM", Content = content, PrimaryButtonText = "SAVE", CloseButtonText = "CANCEL", XamlRoot = XamlRoot };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        if (await Ui.ShowDialog(dialog) != ContentDialogResult.Primary) return;
         try { await Store.UpdateTodayTaskAsync(task, input.Text, task.IsCompleted, SelectedParcelId(parcelPicker)); }
         catch (ArgumentException exception) { await Dialogs.ShowMessage(this, "TASK NOT SAVED", exception.Message); }
         catch (Exception exception) { Services.AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "TASK NOT SAVED", "The local data could not be updated."); }

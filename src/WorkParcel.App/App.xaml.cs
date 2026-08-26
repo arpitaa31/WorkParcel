@@ -45,6 +45,8 @@ public partial class App : Application
         catch (DatabaseStartupException exception) { startupError = exception.Message; }
         catch (Exception exception) { startupError = "WorkParcel could not finish starting. Your local data was not deleted."; new AppLogger(new AppDataPaths()).Error("Unexpected startup failure", exception); }
         _window = new MainWindow(startupError);
+        BrowserIntegrationService.Current.OpenWorkParcelRequested += (_, _) => _window?.DispatcherQueue.TryEnqueue(() => _window.Activate());
+        BrowserIntegrationService.Current.Start();
         _window.Activate();
     }
 }

@@ -3,11 +3,17 @@ using WorkParcel_App.Models;
 
 namespace WorkParcel_App.Services;
 
+public sealed class DuplicateParcelItemException : InvalidOperationException
+{
+    public DuplicateParcelItemException(string message) : base(message) { }
+}
+
 public sealed class WorkspaceStore : BindableBase
 {
     private static readonly Lazy<WorkspaceStore> _current = new(() => new WorkspaceStore());
     private readonly DatabaseInitializer _initializer;
     private readonly WorkspaceRepository _repository;
+    private readonly ItemAvailabilityService _availability = new();
     private readonly SemaphoreSlim _initializationGate = new(1, 1);
     private bool _initialized;
     private string _theme = "Dark";
@@ -82,6 +88,81 @@ public sealed class WorkspaceStore : BindableBase
         return parcel;
     }
 
+    public async Task<Parcel> CreateWithItemsAsync(string name, string description, IReadOnlyList<ParcelItem> items, CancellationToken cancellationToken = default)
+    {
+        var cleanName = ValidateName(name); var cleanDescription = ValidateDescription(description); var now = DateTime.Now;
+        var parcel = new Parcel { Name = cleanName, Description = cleanDescription, Status = ParcelStatus.Packed, CreatedAt = now, UpdatedAt = now, LastPackedAt = now };
+        var prepared = PrepareItems(parcel, items, Array.Empty<ParcelItem>());
+        var history = NewHistory(parcel, ParcelHistoryEventType.ItemsCaptured, $"Parcel packed — {prepared.Count} item{(prepared.Count == 1 ? string.Empty : "s")} saved");
+        await _repository.InsertParcelWithItemsAsync(parcel, prepared, history, cancellationToken);
+        foreach (var item in prepared) parcel.Items.Add(item); parcel.History.Add(history); Parcels.Insert(0, parcel); ParcelCount++;
+        return parcel;
+    }
+
+    public async Task AddItemsAsync(Parcel parcel, IReadOnlyList<ParcelItem> items, CancellationToken cancellationToken = default)
+    {
+        if (items.Count == 0) return;
+        var prepared = PrepareItems(parcel, items, parcel.Items); var now = DateTime.Now;
+        var history = NewHistory(parcel, prepared.Count == 1 ? ParcelHistoryEventType.ItemAdded : ParcelHistoryEventType.ItemsCaptured, prepared.Count == 1 ? $"{prepared[0].TypeLabel} added" : $"{prepared.Count} items added");
+        await _repository.InsertItemsWithHistoryAsync(prepared, history, cancellationToken);
+        parcel.UpdatedAt = now; foreach (var item in prepared) parcel.Items.Add(item); parcel.History.Insert(0, history);
+    }
+
+    public async Task UpdateItemAsync(Parcel parcel, ParcelItem item, ParcelHistoryEventType eventType = ParcelHistoryEventType.ItemEdited, string? summary = null, CancellationToken cancellationToken = default)
+    {
+        if (ParcelItemIdentity.IsDuplicate(parcel.Items, item, item.Id)) throw new DuplicateParcelItemException("That item is already saved in this parcel.");
+        item.DisplayName = ValidateItemName(item.DisplayName); item.UpdatedAt = DateTime.Now; parcel.UpdatedAt = item.UpdatedAt;
+        var history = NewHistory(parcel, eventType, summary ?? $"{item.TypeLabel} edited");
+        await _repository.UpdateItemWithHistoryAsync(item, history, cancellationToken); parcel.History.Insert(0, history); parcel.NotifyItemsChanged();
+    }
+
+    public async Task RemoveItemAsync(Parcel parcel, ParcelItem item, CancellationToken cancellationToken = default)
+    {
+        if (!parcel.Items.Contains(item)) return;
+        var history = NewHistory(parcel, ParcelHistoryEventType.ItemRemoved, $"{item.TypeLabel} removed — external resource unchanged");
+        await _repository.DeleteItemWithHistoryAsync(item.Id, history, cancellationToken);
+        parcel.UpdatedAt = history.Timestamp; parcel.Items.Remove(item); parcel.History.Insert(0, history);
+    }
+
+    public async Task RemoveItemsAsync(Parcel parcel, IReadOnlyList<ParcelItem> items, CancellationToken cancellationToken = default)
+    {
+        var selected = items.Where(item => parcel.Items.Contains(item)).Distinct().ToList(); if (selected.Count == 0) return;
+        var history = NewHistory(parcel, ParcelHistoryEventType.ItemRemoved, $"{selected.Count} item{(selected.Count == 1 ? string.Empty : "s")} removed - external resources unchanged");
+        await _repository.DeleteItemsWithHistoryAsync(parcel.Id, selected.Select(item => item.Id).ToList(), history, cancellationToken);
+        parcel.UpdatedAt = history.Timestamp; foreach (var item in selected) parcel.Items.Remove(item); parcel.History.Insert(0, history);
+    }
+
+    public async Task ReplaceItemsAsync(Parcel parcel, IReadOnlyList<ParcelItem> selected, string summary, ParcelHistoryEventType eventType = ParcelHistoryEventType.Packed, CancellationToken cancellationToken = default)
+    {
+        var itemState = selected.Select(item => (Item: item, item.ParcelId, item.DisplayName, item.CreatedAt, item.UpdatedAt, item.SortOrder)).ToList(); var prepared = PrepareItems(parcel, selected, Array.Empty<ParcelItem>()); var now = DateTime.Now; var oldStatus = parcel.Status; var oldUpdated = parcel.UpdatedAt; var oldPacked = parcel.LastPackedAt;
+        parcel.Status = ParcelStatus.Packed; parcel.UpdatedAt = now; parcel.LastPackedAt = now;
+        var history = NewHistory(parcel, eventType, summary);
+        try { await _repository.ReplaceItemsWithHistoryAsync(parcel, prepared, history, cancellationToken); }
+        catch { parcel.Status = oldStatus; parcel.UpdatedAt = oldUpdated; parcel.LastPackedAt = oldPacked; foreach (var old in itemState) { old.Item.ParcelId = old.ParcelId; old.Item.DisplayName = old.DisplayName; old.Item.CreatedAt = old.CreatedAt; old.Item.UpdatedAt = old.UpdatedAt; old.Item.SortOrder = old.SortOrder; } throw; }
+        parcel.Items.Clear(); foreach (var item in prepared) parcel.Items.Add(item); parcel.History.Insert(0, history); if (CurrentParcel?.Id == parcel.Id) CurrentParcel = null;
+    }
+
+    public async Task VerifyItemsAsync(Parcel parcel, CancellationToken cancellationToken = default)
+    {
+        foreach (var item in parcel.Items)
+        {
+            cancellationToken.ThrowIfCancellationRequested(); await _availability.VerifyAsync(item, cancellationToken); item.UpdatedAt = DateTime.Now;
+        }
+        await _repository.UpdateItemStatesAsync(parcel.Items, cancellationToken);
+        parcel.NotifyItemsChanged();
+    }
+
+    public async Task MarkBrowserItemsOpenedAsync(Parcel parcel, IEnumerable<ParcelItem> items, CancellationToken cancellationToken = default)
+    {
+        var selected = items.Where(item => item.ItemType == ParcelItemType.BrowserTab && parcel.Items.Contains(item)).Distinct().ToList();
+        if (selected.Count == 0) return;
+        var openedAt = DateTime.Now;
+        var previous = selected.Select(item => (Item: item, Value: item.BrowserLastOpenedAt)).ToList();
+        foreach (var item in selected) item.BrowserLastOpenedAt = openedAt;
+        try { await _repository.UpdateBrowserLastOpenedAsync(selected, openedAt, cancellationToken); }
+        catch { foreach (var entry in previous) entry.Item.BrowserLastOpenedAt = entry.Value; throw; }
+    }
+
     public async Task UpdateParcelAsync(Parcel parcel, string originalName, string originalDescription, CancellationToken cancellationToken = default)
     {
         var cleanName = ValidateName(parcel.Name);
@@ -96,18 +177,19 @@ public sealed class WorkspaceStore : BindableBase
         if (history is not null) parcel.History.Insert(0, history);
     }
 
-    public async Task SetStateAsync(Parcel parcel, ParcelStatus state, CancellationToken cancellationToken = default)
+    public async Task SetStateAsync(Parcel parcel, ParcelStatus state, string? summary = null, CancellationToken cancellationToken = default)
     {
         if (state is ParcelStatus.Archived) throw new ArgumentException("Use ArchiveAsync for archived parcels.", nameof(state));
         if (parcel.Status == state) return;
-        var now = DateTime.Now;
+        var now = DateTime.Now; var oldStatus = parcel.Status; var oldUpdated = parcel.UpdatedAt; var oldOpened = parcel.LastOpenedAt; var oldPacked = parcel.LastPackedAt;
         parcel.Status = state;
         parcel.UpdatedAt = now;
         if (state == ParcelStatus.Open) parcel.LastOpenedAt = now;
         if (state == ParcelStatus.Packed) parcel.LastPackedAt = now;
         var history = NewHistory(parcel, state == ParcelStatus.Open ? ParcelHistoryEventType.Opened : ParcelHistoryEventType.Packed,
-            state == ParcelStatus.Open ? "Parcel marked open — no items saved yet" : "Parcel packed — 0 items");
-        await _repository.UpdateParcelWithHistoryAsync(parcel, history, cancellationToken);
+            summary ?? (state == ParcelStatus.Open ? $"Parcel opened — {parcel.ItemCount} items" : $"Parcel packed — {parcel.ItemCount} items"));
+        try { await _repository.UpdateParcelWithHistoryAsync(parcel, history, cancellationToken); }
+        catch { parcel.Status = oldStatus; parcel.UpdatedAt = oldUpdated; parcel.LastOpenedAt = oldOpened; parcel.LastPackedAt = oldPacked; throw; }
         parcel.History.Insert(0, history);
         CurrentParcel = state == ParcelStatus.Open ? parcel : null;
     }
@@ -115,12 +197,14 @@ public sealed class WorkspaceStore : BindableBase
     public async Task ArchiveAsync(Parcel parcel, CancellationToken cancellationToken = default)
     {
         if (parcel.Status == ParcelStatus.Archived) return;
+        var oldStatus = parcel.Status; var oldPrevious = parcel.PreviousStatus; var oldArchived = parcel.ArchivedAt; var oldUpdated = parcel.UpdatedAt;
         parcel.PreviousStatus = parcel.Status is ParcelStatus.Open or ParcelStatus.Packed ? parcel.Status : ParcelStatus.Packed;
         parcel.Status = ParcelStatus.Archived;
         parcel.ArchivedAt = DateTime.Now;
         parcel.UpdatedAt = DateTime.Now;
         var history = NewHistory(parcel, ParcelHistoryEventType.Archived, "Parcel moved to archive");
-        await _repository.UpdateParcelWithHistoryAsync(parcel, history, cancellationToken);
+        try { await _repository.UpdateParcelWithHistoryAsync(parcel, history, cancellationToken); }
+        catch { parcel.Status = oldStatus; parcel.PreviousStatus = oldPrevious; parcel.ArchivedAt = oldArchived; parcel.UpdatedAt = oldUpdated; throw; }
         parcel.History.Insert(0, history);
         Parcels.Remove(parcel);
         if (!Archived.Contains(parcel)) Archived.Insert(0, parcel);
@@ -130,12 +214,14 @@ public sealed class WorkspaceStore : BindableBase
     public async Task RestoreAsync(Parcel parcel, CancellationToken cancellationToken = default)
     {
         if (parcel.Status != ParcelStatus.Archived) return;
+        var oldStatus = parcel.Status; var oldPrevious = parcel.PreviousStatus; var oldArchived = parcel.ArchivedAt; var oldUpdated = parcel.UpdatedAt;
         parcel.Status = parcel.PreviousStatus is ParcelStatus.Open or ParcelStatus.Packed ? parcel.PreviousStatus.Value : ParcelStatus.Packed;
         parcel.PreviousStatus = null;
         parcel.ArchivedAt = null;
         parcel.UpdatedAt = DateTime.Now;
         var history = NewHistory(parcel, ParcelHistoryEventType.Restored, "Parcel restored from archive");
-        await _repository.UpdateParcelWithHistoryAsync(parcel, history, cancellationToken);
+        try { await _repository.UpdateParcelWithHistoryAsync(parcel, history, cancellationToken); }
+        catch { parcel.Status = oldStatus; parcel.PreviousStatus = oldPrevious; parcel.ArchivedAt = oldArchived; parcel.UpdatedAt = oldUpdated; throw; }
         parcel.History.Insert(0, history);
         Archived.Remove(parcel);
         if (!Parcels.Contains(parcel)) Parcels.Insert(0, parcel);
@@ -200,7 +286,19 @@ public sealed class WorkspaceStore : BindableBase
     };
 
     private static string BuildUpdateSummary(bool nameChanged, bool descriptionChanged) => nameChanged && descriptionChanged ? "Parcel name and description updated" : nameChanged ? "Parcel renamed" : "Parcel description updated";
+    private static List<ParcelItem> PrepareItems(Parcel parcel, IReadOnlyList<ParcelItem> items, IEnumerable<ParcelItem> existing)
+    {
+        var result = new List<ParcelItem>(); var all = existing.ToList(); var now = DateTime.Now; var sort = all.Count;
+        foreach (var item in items)
+        {
+            item.ParcelId = parcel.Id; item.DisplayName = ValidateItemName(item.DisplayName); if (item.CreatedAt == default) item.CreatedAt = now; item.UpdatedAt = now; item.SortOrder = sort++;
+            if (ParcelItemIdentity.IsDuplicate(all.Concat(result), item)) throw new DuplicateParcelItemException($"{item.DisplayName} is already saved in this parcel.");
+            result.Add(item);
+        }
+        return result;
+    }
     private static string ValidateName(string name) { var clean = name?.Trim() ?? string.Empty; if (clean.Length == 0) throw new ArgumentException("A parcel name is required.", nameof(name)); if (clean.Length > 80) throw new ArgumentException("Parcel names must be 80 characters or fewer.", nameof(name)); return clean; }
+    private static string ValidateItemName(string name) { var clean = name?.Trim() ?? string.Empty; if (clean.Length == 0) throw new ArgumentException("An item name is required.", nameof(name)); if (clean.Length > 160) throw new ArgumentException("Item names must be 160 characters or fewer.", nameof(name)); return clean; }
     private static string ValidateDescription(string description) { var clean = description?.Trim() ?? string.Empty; if (clean.Length > 240) throw new ArgumentException("Descriptions must be 240 characters or fewer.", nameof(description)); return clean; }
     private static string ValidateTask(string text) { var clean = text?.Trim() ?? string.Empty; if (clean.Length == 0) throw new ArgumentException("A task is required.", nameof(text)); if (clean.Length > 200) throw new ArgumentException("Tasks must be 200 characters or fewer.", nameof(text)); return clean; }
 }

@@ -11,11 +11,19 @@
     <UseWinUI>true</UseWinUI>
     <WinUISDKReferences>false</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType Condition="'$(EnableMsixTooling)' == 'false'">None</WindowsPackageType>
+    <!-- Unpackaged runs must carry the Windows App SDK runtime because this
+         environment does not have a registered framework package. -->
+    <WindowsAppSDKSelfContained Condition="'$(EnableMsixTooling)' == 'false'">true</WindowsAppSDKSelfContained>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Include="..\WorkParcel.Core\BrowserProtocol.cs" Link="BrowserProtocol.cs" />
+    <Compile Include="..\WorkParcel.Core\BrowserTabRules.cs" Link="BrowserTabRules.cs" />
+    <Compile Include="..\WorkParcel.Core\BrowserRestorePlanner.cs" Link="BrowserRestorePlanner.cs" />
+    <Compile Include="..\WorkParcel.Core\BrowserClosePlanner.cs" Link="BrowserClosePlanner.cs" />
     <Content Include="Assets\SplashScreen.scale-200.png" />
     <Content Include="Assets\LockScreenLogo.scale-200.png" />
     <Content Include="Assets\Square150x150Logo.scale-200.png" />
@@ -66,9 +74,11 @@
 
   <!-- Publish Properties -->
   <PropertyGroup>
-    <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
-    <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
-    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
-    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
+    <!-- ReadyToRun requires a downloaded architecture-specific runtime pack;
+         keeping it off makes local and CI Release builds reproducible. -->
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <!-- WinUI and the reflection-based JSON protocol must remain untrimmed for
+         ordinary builds; trimming requires a self-contained publish profile. -->
+    <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 </Project>

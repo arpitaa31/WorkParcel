@@ -7,11 +7,11 @@ public sealed class AppLogger
     public AppLogger(AppDataPaths paths) => _paths = paths;
 
     public void Info(string message) => Write("INFO", message);
-    public void Error(string message, Exception? exception = null) => Write("ERROR", exception is null ? message : $"{message}: {exception.GetType().Name}: {exception.Message}");
+    public void Error(string message, Exception? exception = null) => Write("ERROR", exception is null ? message : $"{message}: {exception.GetType().Name} (0x{exception.HResult:X8})");
 
     public static void LogTechnicalError(Exception exception)
     {
-        try { new AppLogger(new AppDataPaths()).Error("Unexpected UI operation failure", exception); }
+        try { new AppLogger(new AppDataPaths()).Write("ERROR", $"Unexpected UI operation failure: {exception.GetType().Name} (0x{exception.HResult:X8})"); }
         catch { /* Logging must never take down the app. */ }
     }
 

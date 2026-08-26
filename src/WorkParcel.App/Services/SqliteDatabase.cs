@@ -43,7 +43,7 @@ public sealed class SqliteConnectionFactory
 
 public sealed class DatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 5;
     private readonly SqliteConnectionFactory _factory;
     private readonly AppLogger _logger;
 
@@ -77,6 +77,26 @@ public sealed class DatabaseInitializer
             {
                 await MigrateToV2Async(connection, transaction, cancellationToken);
                 await SetVersionAsync(connection, transaction, 2, cancellationToken);
+                version = 2;
+            }
+
+            if (version < 3)
+            {
+                await MigrateToV3Async(connection, transaction, cancellationToken);
+                await SetVersionAsync(connection, transaction, 3, cancellationToken);
+            }
+
+            if (version < 4)
+            {
+                await MigrateToV4Async(connection, transaction, cancellationToken);
+                await SetVersionAsync(connection, transaction, 4, cancellationToken);
+                version = 4;
+            }
+
+            if (version < 5)
+            {
+                await MigrateToV5Async(connection, transaction, cancellationToken);
+                await SetVersionAsync(connection, transaction, 5, cancellationToken);
             }
 
             await transaction.CommitAsync(cancellationToken);
@@ -163,6 +183,135 @@ FROM Parcels_Legacy;";
         {
             await CreateSchemaV1Async(connection, transaction, cancellationToken);
         }
+    }
+
+    private static async Task MigrateToV3Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var existingColumns = await ReadColumnsAsync(connection, transaction, "ParcelItems", cancellationToken);
+        var hasLegacyItems = existingColumns.Count > 0 && !existingColumns.Contains("ItemType", StringComparer.OrdinalIgnoreCase);
+        if (hasLegacyItems) await ExecuteAsync(connection, transaction, "ALTER TABLE ParcelItems RENAME TO ParcelItems_LegacyV2;", cancellationToken);
+        const string sql = @"
+CREATE TABLE IF NOT EXISTS ParcelItems (
+    Id TEXT PRIMARY KEY,
+    ParcelId TEXT NOT NULL,
+    ItemType TEXT NOT NULL CHECK(ItemType IN ('ApplicationWindow','Application','File','Folder','WebLink','Note')),
+    DisplayName TEXT NOT NULL,
+    Value TEXT NOT NULL DEFAULT '',
+    NormalizedIdentity TEXT NULL,
+    SecondaryDetail TEXT NULL,
+    CreatedAt TEXT NOT NULL,
+    UpdatedAt TEXT NOT NULL,
+    LastVerifiedAt TEXT NULL,
+    SortOrder INTEGER NOT NULL DEFAULT 0,
+    IsMissing INTEGER NOT NULL DEFAULT 0 CHECK(IsMissing IN (0,1)),
+    IsInaccessible INTEGER NOT NULL DEFAULT 0 CHECK(IsInaccessible IN (0,1)),
+    HasChanged INTEGER NOT NULL DEFAULT 0 CHECK(HasChanged IN (0,1)),
+    ExecutablePath TEXT NULL,
+    LaunchArguments TEXT NULL,
+    WorkingDirectory TEXT NULL,
+    WindowTitle TEXT NULL,
+    ProcessName TEXT NULL,
+    ApplicationUserModelId TEXT NULL,
+    FileSize INTEGER NULL,
+    FileModifiedAt TEXT NULL,
+    Fingerprint TEXT NULL,
+    IconCacheKey TEXT NULL,
+    NoteContent TEXT NULL,
+    LaunchEnabled INTEGER NOT NULL DEFAULT 1 CHECK(LaunchEnabled IN (0,1)),
+    CloseSupported INTEGER NOT NULL DEFAULT 0 CHECK(CloseSupported IN (0,1)),
+    FOREIGN KEY(ParcelId) REFERENCES Parcels(Id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS IX_ParcelItems_Parcel_Sort ON ParcelItems(ParcelId, SortOrder, CreatedAt);
+CREATE INDEX IF NOT EXISTS IX_ParcelItems_Parcel_Type ON ParcelItems(ParcelId, ItemType);
+CREATE UNIQUE INDEX IF NOT EXISTS UX_ParcelItems_Identity ON ParcelItems(ParcelId, ItemType, NormalizedIdentity) WHERE NormalizedIdentity IS NOT NULL;
+";
+        await ExecuteAsync(connection, transaction, sql, cancellationToken);
+        if (!hasLegacyItems) return;
+
+        const string import = @"
+INSERT OR IGNORE INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentity,SecondaryDetail,CreatedAt,UpdatedAt,LastVerifiedAt,SortOrder,IsMissing,IsInaccessible,HasChanged,ExecutablePath,WorkingDirectory,FileSize,FileModifiedAt,Fingerprint,LaunchEnabled,CloseSupported)
+SELECT Id, ParcelId,
+       CASE
+         WHEN lower(Location) LIKE 'http://%' OR lower(Location) LIKE 'https://%' THEN 'WebLink'
+         WHEN Type = 0 THEN 'File'
+         WHEN Type = 1 THEN 'Folder'
+         WHEN Type = 2 THEN 'WebLink'
+         WHEN Type = 3 THEN 'Application'
+         ELSE 'Note'
+       END,
+       COALESCE(NULLIF(Name,''),'Imported item'), COALESCE(Location,''),
+       CASE WHEN Type = 4 THEN NULL ELSE COALESCE(NULLIF(NormalizedLocation,''),NULLIF(Location,'')) END,
+       NULLIF(Description,''), CreatedAt, UpdatedAt, NULLIF(LastVerifiedAt,''), SortOrder,
+       COALESCE(IsMissing,0), CASE WHEN AvailabilityState = 'Inaccessible' THEN 1 ELSE 0 END,
+       CASE WHEN AvailabilityState = 'Changed' THEN 1 ELSE 0 END,
+       CASE WHEN Type = 3 THEN Location ELSE NULL END, NULLIF(WorkingDirectory,''), FileSize,
+       NULLIF(ModifiedAt,''), NULLIF(Fingerprint,''), CASE WHEN Type = 4 THEN 0 ELSE 1 END, 0
+FROM ParcelItems_LegacyV2;
+DROP TABLE ParcelItems_LegacyV2;";
+        await ExecuteAsync(connection, transaction, import, cancellationToken);
+    }
+
+    private static async Task MigrateToV4Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        await ExecuteAsync(connection, transaction, "DROP INDEX IF EXISTS IX_ParcelItems_Parcel_Sort; DROP INDEX IF EXISTS IX_ParcelItems_Parcel_Type; DROP INDEX IF EXISTS UX_ParcelItems_Identity; ALTER TABLE ParcelItems RENAME TO ParcelItems_V3;", cancellationToken);
+        const string create = @"
+CREATE TABLE ParcelItems (
+    Id TEXT PRIMARY KEY,
+    ParcelId TEXT NOT NULL,
+    ItemType TEXT NOT NULL CHECK(ItemType IN ('ApplicationWindow','Application','File','Folder','WebLink','Note','BrowserTab')),
+    DisplayName TEXT NOT NULL,
+    Value TEXT NOT NULL DEFAULT '',
+    NormalizedIdentity TEXT NULL,
+    SecondaryDetail TEXT NULL,
+    CreatedAt TEXT NOT NULL,
+    UpdatedAt TEXT NOT NULL,
+    LastVerifiedAt TEXT NULL,
+    SortOrder INTEGER NOT NULL DEFAULT 0,
+    IsMissing INTEGER NOT NULL DEFAULT 0 CHECK(IsMissing IN (0,1)),
+    IsInaccessible INTEGER NOT NULL DEFAULT 0 CHECK(IsInaccessible IN (0,1)),
+    HasChanged INTEGER NOT NULL DEFAULT 0 CHECK(HasChanged IN (0,1)),
+    ExecutablePath TEXT NULL,
+    LaunchArguments TEXT NULL,
+    WorkingDirectory TEXT NULL,
+    WindowTitle TEXT NULL,
+    ProcessName TEXT NULL,
+    ApplicationUserModelId TEXT NULL,
+    FileSize INTEGER NULL,
+    FileModifiedAt TEXT NULL,
+    Fingerprint TEXT NULL,
+    IconCacheKey TEXT NULL,
+    NoteContent TEXT NULL,
+    LaunchEnabled INTEGER NOT NULL DEFAULT 1 CHECK(LaunchEnabled IN (0,1)),
+    CloseSupported INTEGER NOT NULL DEFAULT 0 CHECK(CloseSupported IN (0,1)),
+    BrowserFamily TEXT NULL,
+    BrowserWindowGroupId TEXT NULL,
+    BrowserTabIndex INTEGER NULL,
+    BrowserPinned INTEGER NOT NULL DEFAULT 0 CHECK(BrowserPinned IN (0,1)),
+    BrowserActive INTEGER NOT NULL DEFAULT 0 CHECK(BrowserActive IN (0,1)),
+    BrowserTabGroupId TEXT NULL,
+    BrowserTabGroupTitle TEXT NULL,
+    BrowserTabGroupColor TEXT NULL,
+    BrowserFaviconUrl TEXT NULL,
+    BrowserCapturedAt TEXT NULL,
+    BrowserLastOpenedAt TEXT NULL,
+    FOREIGN KEY(ParcelId) REFERENCES Parcels(Id) ON DELETE CASCADE
+);
+CREATE INDEX IX_ParcelItems_Parcel_Sort ON ParcelItems(ParcelId, SortOrder, CreatedAt);
+CREATE INDEX IX_ParcelItems_Parcel_Type ON ParcelItems(ParcelId, ItemType);
+CREATE UNIQUE INDEX UX_ParcelItems_Identity ON ParcelItems(ParcelId, ItemType, NormalizedIdentity) WHERE NormalizedIdentity IS NOT NULL;";
+        await ExecuteAsync(connection, transaction, create, cancellationToken);
+        const string copy = @"
+INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentity,SecondaryDetail,CreatedAt,UpdatedAt,LastVerifiedAt,SortOrder,IsMissing,IsInaccessible,HasChanged,ExecutablePath,LaunchArguments,WorkingDirectory,WindowTitle,ProcessName,ApplicationUserModelId,FileSize,FileModifiedAt,Fingerprint,IconCacheKey,NoteContent,LaunchEnabled,CloseSupported)
+SELECT Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentity,SecondaryDetail,CreatedAt,UpdatedAt,LastVerifiedAt,SortOrder,IsMissing,IsInaccessible,HasChanged,ExecutablePath,LaunchArguments,WorkingDirectory,WindowTitle,ProcessName,ApplicationUserModelId,FileSize,FileModifiedAt,Fingerprint,IconCacheKey,NoteContent,LaunchEnabled,CloseSupported FROM ParcelItems_V3;
+DROP TABLE ParcelItems_V3;";
+        await ExecuteAsync(connection, transaction, copy, cancellationToken);
+    }
+
+    private static async Task MigrateToV5Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var columns = await ReadColumnsAsync(connection, transaction, "ParcelItems", cancellationToken);
+        if (!columns.Contains("BrowserDomain", StringComparer.OrdinalIgnoreCase)) await ExecuteAsync(connection, transaction, "ALTER TABLE ParcelItems ADD COLUMN BrowserDomain TEXT NULL;", cancellationToken);
+        await ExecuteAsync(connection, transaction, "UPDATE ParcelItems SET BrowserDomain = SecondaryDetail WHERE ItemType = 'BrowserTab' AND BrowserDomain IS NULL;", cancellationToken);
     }
 
     private static async Task<HashSet<string>> ReadColumnsAsync(SqliteConnection connection, SqliteTransaction transaction, string table, CancellationToken cancellationToken)

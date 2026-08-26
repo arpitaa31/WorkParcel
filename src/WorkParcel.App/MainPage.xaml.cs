@@ -22,6 +22,8 @@ public sealed partial class MainPage : Page
     private void MainPage_Loaded(object sender, RoutedEventArgs e)
     {
         Loaded -= MainPage_Loaded;
+        foreach (var item in Navigation.MenuItems.OfType<NavigationViewItem>()) InteractionMotion.Attach(item, 1.01f, .985f);
+        foreach (var item in Navigation.FooterMenuItems.OfType<NavigationViewItem>()) InteractionMotion.Attach(item, 1.01f, .985f);
         Navigation.SelectionChanged -= Navigation_SelectionChanged;
         Navigation.SelectedItem = Navigation.MenuItems[0];
         Navigation.SelectionChanged += Navigation_SelectionChanged;

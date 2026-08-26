@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "WorkParcel Browser Bridge",
+  "version": "1.0.0",
+  "description": "Connects selected Chrome or Edge tab metadata to WorkParcel through native messaging.",
+  "permissions": ["tabs", "tabGroups", "nativeMessaging", "storage"],
+  "incognito": "not_allowed",
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "WorkParcel", "default_popup": "popup.html" },
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "128": "icons/icon128.png" }
+}
