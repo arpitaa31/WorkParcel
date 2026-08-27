@@ -93,7 +93,20 @@ public sealed partial class SettingsPage : PageBase
         LoadBrowser();
     }
 
-    private void ShowSetupHelp(string browser) => _ = Dialogs.ShowMessage(this, $"SET UP {browser.ToUpperInvariant()}", $"1. Load browser-extension as unpacked in {browser} extensions.\n2. Copy the exact 32-character extension ID.\n3. Run tools\\Setup-BrowserHost.ps1 -Browser {browser.ToUpperInvariant()} -HostExecutablePath <host.exe> -{(browser == "chrome" ? "Chrome" : "Edge")}ExtensionId <id>.\n4. Restart the browser if it cached the old host manifest.");
+    private void ShowSetupHelp(string browser)
+    {
+        var browserName = browser.ToUpperInvariant();
+        var extensionFolder = Path.Combine(AppContext.BaseDirectory, "browser-extension");
+        var hostExecutable = Path.Combine(AppContext.BaseDirectory, "BrowserHost", "WorkParcel.BrowserHost.exe");
+        var setupScript = Path.Combine(AppContext.BaseDirectory, "BrowserHost", "Setup-BrowserHost.ps1");
+        var extensionStep = Directory.Exists(extensionFolder)
+            ? $"1. Load this folder as unpacked in {browser} extensions:\n   {extensionFolder}"
+            : $"1. Load the included browser-extension folder as unpacked in {browser} extensions.";
+        var registrationStep = File.Exists(setupScript) && File.Exists(hostExecutable)
+            ? $"3. Run:\n   powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"{setupScript}\" -Browser {browserName} -HostExecutablePath \"{hostExecutable}\" -{(browser == "chrome" ? "Chrome" : "Edge")}ExtensionId <exact-id>"
+            : "3. Run the BrowserHost\\Setup-BrowserHost.ps1 file shipped with this build, using the host executable in that same folder.";
+        _ = Dialogs.ShowMessage(this, $"SET UP {browserName}", $"{extensionStep}\n2. Copy the exact 32-character extension ID.\n{registrationStep}\n4. Restart the browser if it cached the old host manifest.");
+    }
     private static void OpenExtensionFolder()
     {
         try
@@ -102,7 +115,7 @@ public sealed partial class SettingsPage : PageBase
             for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
                 candidates.Add(Path.Combine(directory.FullName, "browser-extension"));
             var path = candidates.FirstOrDefault(Directory.Exists);
-            if (path is null) throw new DirectoryNotFoundException("The browser-extension folder was not found beside the app or in its source tree.");
+            if (path is null) throw new DirectoryNotFoundException("The browser-extension folder is not included with this build.");
             Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         }
         catch (Exception exception) { AppLogger.LogTechnicalError(exception); }
@@ -141,7 +154,7 @@ public sealed partial class SettingsPage : PageBase
         catch (Exception exception) { AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "CACHE NOT CLEARED", "The favicon cache could not be removed. Your saved tabs were not changed."); }
     }
 
-    private UIElement About() { var stack = Ui.Stack(4); stack.Children.Add(Ui.Text("WorkParcel", 14, true)); stack.Children.Add(Ui.Mono("LOCAL PARCEL UTILITY", 10)); stack.Children.Add(Ui.Text("Save a setup. Pack it away. Open it when you return.", 12, false, "#8D9CA2")); return stack; }
+    private UIElement About() { var stack = Ui.Stack(4); stack.Children.Add(Ui.Text("WorkParcel", 14, true)); stack.Children.Add(Ui.Mono($"VERSION {typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.1.0"}", 10)); stack.Children.Add(Ui.Mono("LOCAL PARCEL UTILITY", 10)); stack.Children.Add(Ui.Text("Save a setup. Open it when you return.", 12, false, "#8D9CA2")); return stack; }
 
     private async Task LoadDataAsync()
     {

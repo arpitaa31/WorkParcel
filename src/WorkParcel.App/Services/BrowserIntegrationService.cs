@@ -26,7 +26,7 @@ public sealed record BrowserConnectionInfo(string Browser, BrowserConnectionStat
 public sealed class BrowserIntegrationService : IDisposable
 {
     private static readonly Lazy<BrowserIntegrationService> Lazy = new(() => new BrowserIntegrationService());
-    public const string ExpectedExtensionVersion = "1.0.0";
+    public const string ExpectedExtensionVersion = "0.1.0";
     private readonly ConcurrentDictionary<string, BrowserPipeSession> _sessions = new();
     private readonly ConcurrentDictionary<string, BrowserConnectionInfo> _lastKnown = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _shutdown = new();

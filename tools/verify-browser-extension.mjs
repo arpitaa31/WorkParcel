@@ -95,10 +95,10 @@ const chrome = {
 const context = vm.createContext({ chrome, navigator: { userAgent: "Mozilla/5.0 Chrome/140.0" }, console, setTimeout, clearTimeout, URL, Date, Map, Set, Promise });
 vm.runInContext(fs.readFileSync(new URL("background.js", extensionRoot), "utf8"), context, { filename: "background.js" });
 await new Promise(resolve => setTimeout(resolve, 10));
-await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "hello", browser: "chrome", connectionId: "test-connection", extensionVersion: "1.0.0", payload: { status: "CONNECTED", connectionId: "test-connection" } });
-await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "version-status", browser: "chrome", connectionId: "test-connection", extensionVersion: "1.0.0", payload: { status: "VERSION_MISMATCH", connectionId: "test-connection" } });
+await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "hello", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.1.0", payload: { status: "CONNECTED", connectionId: "test-connection" } });
+await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "version-status", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.1.0", payload: { status: "VERSION_MISMATCH", connectionId: "test-connection" } });
 assert.equal(vm.runInContext("state.status", context), "VERSION MISMATCH", "protocol mismatch status is presented with user-facing spacing");
-await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "hello-again", browser: "chrome", connectionId: "test-connection", extensionVersion: "1.0.0", payload: { status: "CONNECTED", connectionId: "test-connection" } });
+await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "hello-again", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.1.0", payload: { status: "CONNECTED", connectionId: "test-connection" } });
 assert.equal(context.acceptRequest("persisted-request"), false, "recent command IDs survive a worker restart window");
 context.persistState();
 await new Promise(resolve => setTimeout(resolve, 10));
@@ -107,7 +107,7 @@ await assert.rejects(() => context.sendToApp("refresh", {}, 20), /Connection tim
 await new Promise(resolve => setTimeout(resolve, 10));
 assert.equal(storage.get("workParcelConnection").status, "CONNECTION ERROR", "request timeouts surface a recoverable connection error");
 vm.runInContext("clearTimeout(reconnectTimer); reconnectTimer = null;", context);
-await context.onNativeMessage({ version: 1, type: "error", requestId: "diagnostic-error", browser: "chrome", connectionId: "test-connection", extensionVersion: "1.0.0", payload: { code: "connection_error", message: "diagnostic failure" } });
+await context.onNativeMessage({ version: 1, type: "error", requestId: "diagnostic-error", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.1.0", payload: { code: "connection_error", message: "diagnostic failure" } });
 assert.equal(vm.runInContext("state.status", context), "CONNECTION ERROR", "native connection errors surface in the popup state");
 storageWritesFail = true;
 assert.doesNotThrow(() => context.persistState(), "storage write failures must not escape the worker");

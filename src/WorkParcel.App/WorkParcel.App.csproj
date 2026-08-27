@@ -3,8 +3,10 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <AssemblyName>WorkParcel</AssemblyName>
     <RootNamespace>WorkParcel_App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
     <Platforms>x86;x64;ARM64</Platforms>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-$([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString().ToLowerInvariant())</RuntimeIdentifier>
     <PublishProfile Condition="Exists('Properties\PublishProfiles\win-$(Platform).pubxml')">win-$(Platform).pubxml</PublishProfile>
@@ -81,4 +83,21 @@
          ordinary builds; trimming requires a self-contained publish profile. -->
     <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
+
+  <!-- The WinUI build generates XAML bytecode and the app PRI beside the
+       target output. Unpackaged dotnet publish does not copy these generated
+       files automatically, but the runtime needs them to create a window. -->
+  <Target Name="IncludeGeneratedWinUiAssetsInPublish"
+          AfterTargets="Publish"
+          Condition="'$(WindowsPackageType)' == 'None'">
+    <ItemGroup>
+      <_GeneratedWinUiAsset Include="$(TargetDir)**\*.xbf" />
+      <_GeneratedWinUiAsset Include="$(TargetDir)*.pri" />
+    </ItemGroup>
+    <Error Condition="'@(_GeneratedWinUiAsset)' == ''"
+           Text="No generated WinUI publish assets were found in $(TargetDir)." />
+    <Copy SourceFiles="@(_GeneratedWinUiAsset)"
+          DestinationFiles="@(_GeneratedWinUiAsset->'$(PublishDir)%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>
