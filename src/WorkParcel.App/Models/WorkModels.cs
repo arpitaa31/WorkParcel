@@ -26,7 +26,11 @@ public enum ParcelHistoryEventType
     ItemRemoved,
     ItemRelinked,
     ChangedFileAccepted,
-    CloseRequested
+    CloseRequested,
+    DeskLayoutCaptured,
+    DeskLayoutUpdated,
+    DeskLayoutRestored,
+    DeskLayoutRemoved
 }
 
 public enum ParcelItemType
@@ -58,6 +62,7 @@ public sealed class Parcel : BindableBase
     public DateTime? LastPackedAt { get; set; }
     public DateTime? ArchivedAt { get; set; }
     public ParcelStatus? PreviousStatus { get; set; }
+    public DeskLayoutSnapshot? DeskLayout { get; set; }
     public ObservableCollection<ParcelItem> Items { get; } = new();
     public int ItemCount => Items.Count;
     public int AvailableItemCount => Items.Count(item => !item.IsMissing && !item.IsInaccessible);

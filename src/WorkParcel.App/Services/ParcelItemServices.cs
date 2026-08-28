@@ -161,7 +161,7 @@ public sealed class ItemAvailabilityService
 public static class ParcelItemIdentity
 {
     public static bool IsDuplicate(IEnumerable<ParcelItem> existing, ParcelItem candidate, Guid? ignoreId = null) =>
-        candidate.NormalizedIdentity is not null && existing.Any(item => item.Id != ignoreId && item.ItemType == candidate.ItemType && item.NormalizedIdentity is not null && string.Equals(item.NormalizedIdentity, candidate.NormalizedIdentity, candidate.ItemType is ParcelItemType.WebLink or ParcelItemType.BrowserTab ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase));
+        candidate.ItemType != ParcelItemType.ApplicationWindow && candidate.NormalizedIdentity is not null && existing.Any(item => item.Id != ignoreId && item.ItemType == candidate.ItemType && item.NormalizedIdentity is not null && string.Equals(item.NormalizedIdentity, candidate.NormalizedIdentity, candidate.ItemType is ParcelItemType.WebLink or ParcelItemType.BrowserTab ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase));
 }
 
 public static class ParcelItemRelinker

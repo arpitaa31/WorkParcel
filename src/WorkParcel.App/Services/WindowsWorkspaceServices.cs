@@ -11,7 +11,7 @@ public sealed class OpenWindowService
 {
     private static readonly HashSet<string> SystemNoise = new(StringComparer.OrdinalIgnoreCase)
     {
-        "dwm", "sihost", "ShellExperienceHost", "StartMenuExperienceHost", "SearchHost", "TextInputHost", "LockApp", "SystemSettings", "ApplicationFrameHost", "chrome", "msedge"
+        "dwm", "sihost", "ShellExperienceHost", "StartMenuExperienceHost", "SearchHost", "TextInputHost", "LockApp", "SystemSettings", "ApplicationFrameHost"
     };
 
     public Task<IReadOnlyList<ParcelItem>> DetectAsync(Guid parcelId, CancellationToken cancellationToken = default) => Task.Run(() => Detect(parcelId, cancellationToken), cancellationToken);
@@ -79,7 +79,7 @@ public sealed class ItemLaunchService
         foreach (var item in selected)
         {
             if (item.IsMissing || item.IsInaccessible || !item.LaunchEnabled || item.ItemType == ParcelItemType.Note) continue;
-            if (item.ItemType is ParcelItemType.Application or ParcelItemType.ApplicationWindow)
+            if (item.ItemType == ParcelItemType.Application)
             {
                 var app = WindowsPathIdentity.Normalize(item.ExecutablePath ?? item.Value); if (app is null || !launchedApps.Add(app)) continue;
             }
@@ -90,8 +90,19 @@ public sealed class ItemLaunchService
 
     public async Task<IReadOnlyList<ItemOpenResult>> OpenAsync(IEnumerable<ParcelItem> selected, IEnumerable<ParcelItem>? currentlyOpen = null, CancellationToken cancellationToken = default)
     {
-        var selectedItems = selected.ToList(); var alreadyOpenApps = (currentlyOpen ?? Array.Empty<ParcelItem>()).Where(item => item.ItemType == ParcelItemType.ApplicationWindow).Select(item => WindowsPathIdentity.Normalize(item.ExecutablePath)).Where(path => path is not null).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var alreadyOpen = selectedItems.Where(item => (item.ItemType is ParcelItemType.Application or ParcelItemType.ApplicationWindow) && WindowsPathIdentity.Normalize(item.ExecutablePath ?? item.Value) is string path && alreadyOpenApps.Contains(path)).ToList();
+        var selectedItems = selected.ToList();
+        var currentWindows = (currentlyOpen ?? Array.Empty<ParcelItem>()).Where(item => item.ItemType == ParcelItemType.ApplicationWindow).ToList();
+        var alreadyOpen = selectedItems.Where(item =>
+        {
+            var identity = WindowsPathIdentity.Normalize(item.ExecutablePath ?? item.Value);
+            if (identity is null) return false;
+            if (item.ItemType == ParcelItemType.Application)
+                return currentWindows.Any(open => string.Equals(identity, WindowsPathIdentity.Normalize(open.ExecutablePath ?? open.Value), StringComparison.OrdinalIgnoreCase));
+            if (item.ItemType != ParcelItemType.ApplicationWindow) return false;
+            return currentWindows.Any(open =>
+                string.Equals(identity, WindowsPathIdentity.Normalize(open.ExecutablePath ?? open.Value), StringComparison.OrdinalIgnoreCase) &&
+                DeskMemoryLogic.NormalizeTitle(item.WindowTitle ?? item.DisplayName) == DeskMemoryLogic.NormalizeTitle(open.WindowTitle ?? open.DisplayName));
+        }).ToList();
         var plan = BuildPlan(selectedItems.Except(alreadyOpen)); var inPlan = plan.Select(x => x.Id).ToHashSet(); var results = alreadyOpen.Select(item => new ItemOpenResult(item.Id, ItemOpenStatus.AlreadyOpen, "Application is already open")).ToList();
         foreach (var item in selectedItems.Where(item => !inPlan.Contains(item.Id)))
             if (!alreadyOpen.Contains(item)) results.Add(new ItemOpenResult(item.Id, item.IsMissing ? ItemOpenStatus.Missing : item.IsInaccessible ? ItemOpenStatus.Failed : item.LaunchEnabled && item.ItemType != ParcelItemType.Note ? ItemOpenStatus.Skipped : ItemOpenStatus.Unsupported, item.AvailabilityLabel));
@@ -158,7 +169,7 @@ public sealed class WindowCloseRequestService
     }
 }
 
-internal static class NativeMethods
+internal static partial class NativeMethods
 {
     internal const int GwlExStyle = -20;
     internal const long WsExToolWindow = 0x00000080L;

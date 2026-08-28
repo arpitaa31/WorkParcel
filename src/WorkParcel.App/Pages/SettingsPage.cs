@@ -20,6 +20,7 @@ public sealed partial class SettingsPage : PageBase
         body.Children.Add(Section("APPEARANCE", Appearance()));
         body.Children.Add(Section("LOCAL DATA", _data));
         body.Children.Add(Section("BROWSER INTEGRATION", _browser));
+        body.Children.Add(Section("DESK MEMORY", DeskMemory()));
         body.Children.Add(Section("PRIVACY", Privacy()));
         body.Children.Add(Section("ABOUT", About()));
         SetContent(body); LoadBrowser(); _ = LoadDataAsync();
@@ -72,6 +73,29 @@ public sealed partial class SettingsPage : PageBase
 
     private void AddAction(StackPanel row, string label, Action action) { var button = Ui.Button(label); button.Click += (_, _) => action(); row.Children.Add(button); }
     private void AddAction(StackPanel row, string label, Func<Task> action) { var button = Ui.Button(label); button.Click += async (_, _) => await action(); row.Children.Add(button); }
+    private UIElement DeskMemory()
+    {
+        var current = Store.DeskMemorySettings;
+        var restore = new CheckBox { Content = "RESTORE DESK MEMORY BY DEFAULT WHEN OPENING", IsChecked = current.RestoreByDefault };
+        var review = new CheckBox { Content = "REVIEW MATCHES BEFORE APPLYING A LAYOUT", IsChecked = current.ReviewBeforeApplying };
+        var reuse = new CheckBox { Content = "REUSE STRONGLY MATCHED WINDOWS THAT ARE ALREADY OPEN", IsChecked = current.ReuseMatchingOpenWindows };
+        var maximized = new CheckBox { Content = "RESTORE MAXIMIZED WINDOWS", IsChecked = current.RestoreMaximized };
+        var minimized = new CheckBox { Content = "RESTORE MINIMIZED WINDOWS", IsChecked = current.RestoreMinimized };
+        var preview = new CheckBox { Content = "SHOW A LAYOUT PREVIEW DURING OPEN", IsChecked = current.ShowPreviewDuringOpen };
+        var undo = new CheckBox { Content = "KEEP IN-MEMORY UNDO FOR WINDOW MOVES", IsChecked = current.EnableUndo };
+        var timeout = new NumberBox { Header = "RESTORE TIMEOUT (SECONDS)", Value = current.RestorationTimeoutSeconds, Minimum = 2, Maximum = 120, SmallChange = 1, LargeChange = 5, Width = 230 };
+        var save = Ui.Button("SAVE DESK MEMORY SETTINGS", true);
+        save.Click += async (_, _) =>
+        {
+            try
+            {
+                await Store.SetDeskMemorySettingsAsync(new DeskMemorySettings(restore.IsChecked == true, review.IsChecked == true, reuse.IsChecked == true, maximized.IsChecked == true, minimized.IsChecked == true, preview.IsChecked == true, undo.IsChecked == true, (int)Math.Round(timeout.Value)));
+                save.Content = Ui.Mono("SAVED", 11, "#0B0E10", true);
+            }
+            catch (Exception exception) { AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "SETTINGS NOT SAVED", "The previous Desk Memory settings remain active."); }
+        };
+        var stack = Ui.Stack(6); stack.Children.Add(Ui.Text("Desk Memory stores monitor and window-placement metadata locally. It never stores HWNDs, process IDs, screenshots or application contents.", 12, false, "#8D9CA2")); stack.Children.Add(restore); stack.Children.Add(review); stack.Children.Add(reuse); stack.Children.Add(maximized); stack.Children.Add(minimized); stack.Children.Add(preview); stack.Children.Add(undo); stack.Children.Add(timeout); stack.Children.Add(save); return stack;
+    }
     private static string BrowserStatusText(BrowserConnectionInfo info) => info.Status switch
     {
         BrowserConnectionStatus.Connected => $"CONNECTED — {info.Browser.ToUpperInvariant()}" + (string.IsNullOrWhiteSpace(info.ExtensionVersion) ? string.Empty : $" v{info.ExtensionVersion}"),
@@ -139,7 +163,7 @@ public sealed partial class SettingsPage : PageBase
     private void BuildPrivacy()
     {
         // The settings page is rebuilt so the toggles reflect the effective policy immediately.
-        var body = Body(15); body.Children.Add(Header("SETTINGS", "Local data, browser connection and privacy boundaries.")); body.Children.Add(Section("APPEARANCE", Appearance())); body.Children.Add(Section("LOCAL DATA", _data)); body.Children.Add(Section("BROWSER INTEGRATION", _browser)); body.Children.Add(Section("PRIVACY", Privacy())); body.Children.Add(Section("ABOUT", About())); SetContent(body); LoadBrowser();
+        var body = Body(15); body.Children.Add(Header("SETTINGS", "Local data, browser connection and privacy boundaries.")); body.Children.Add(Section("APPEARANCE", Appearance())); body.Children.Add(Section("LOCAL DATA", _data)); body.Children.Add(Section("BROWSER INTEGRATION", _browser)); body.Children.Add(Section("DESK MEMORY", DeskMemory())); body.Children.Add(Section("PRIVACY", Privacy())); body.Children.Add(Section("ABOUT", About())); SetContent(body); LoadBrowser();
     }
 
     private async Task ClearIconCacheAsync()

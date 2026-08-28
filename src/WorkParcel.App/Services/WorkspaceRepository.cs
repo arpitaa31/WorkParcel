@@ -55,6 +55,8 @@ public sealed class WorkspaceRepository
             }
         }
 
+        await LoadDeskLayoutsAsync(connection, parcels, cancellationToken);
+
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = "SELECT Id, Text, IsCompleted, CreatedAt, CompletedAt, ParcelId, SortOrder FROM TodayTasks ORDER BY IsCompleted, SortOrder, CreatedAt;";
@@ -74,12 +76,13 @@ public sealed class WorkspaceRepository
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task InsertParcelWithItemsAsync(Parcel parcel, IReadOnlyList<ParcelItem> items, ParcelHistoryEntry history, CancellationToken cancellationToken = default)
+    public async Task InsertParcelWithItemsAsync(Parcel parcel, IReadOnlyList<ParcelItem> items, ParcelHistoryEntry history, CancellationToken cancellationToken = default, DeskLayoutSnapshot? layout = null)
     {
         await using var connection = await _factory.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
         await InsertParcelAsync(connection, transaction, parcel, cancellationToken);
         foreach (var item in items) await InsertItemAsync(connection, transaction, item, cancellationToken);
+        if (layout is not null) await InsertDeskLayoutAsync(connection, transaction, layout, cancellationToken);
         await InsertHistoryAsync(connection, transaction, history, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
@@ -191,7 +194,7 @@ NoteContent=$note, LaunchEnabled=$launchEnabled, CloseSupported=$closeSupported,
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task ReplaceItemsWithHistoryAsync(Parcel parcel, IReadOnlyList<ParcelItem> items, ParcelHistoryEntry history, CancellationToken cancellationToken = default)
+    public async Task ReplaceItemsWithHistoryAsync(Parcel parcel, IReadOnlyList<ParcelItem> items, ParcelHistoryEntry history, CancellationToken cancellationToken = default, DeskLayoutSnapshot? layout = null)
     {
         await using var connection = await _factory.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
@@ -201,6 +204,11 @@ NoteContent=$note, LaunchEnabled=$launchEnabled, CloseSupported=$closeSupported,
             await delete.ExecuteNonQueryAsync(cancellationToken);
         }
         foreach (var item in items) await InsertItemAsync(connection, transaction, item, cancellationToken);
+        if (layout is not null)
+        {
+            await DeleteCurrentDeskLayoutAsync(connection, transaction, parcel.Id, cancellationToken);
+            await InsertDeskLayoutAsync(connection, transaction, layout, cancellationToken);
+        }
         await using (var update = connection.CreateCommand())
         {
             update.Transaction = transaction; update.CommandText = "UPDATE Parcels SET State=$state, UpdatedAt=$updated, LastPackedAt=$packed WHERE Id=$id;";
@@ -208,6 +216,42 @@ NoteContent=$note, LaunchEnabled=$launchEnabled, CloseSupported=$closeSupported,
             await update.ExecuteNonQueryAsync(cancellationToken);
         }
         await InsertHistoryAsync(connection, transaction, history, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task SaveDeskLayoutAsync(Guid parcelId, DeskLayoutSnapshot layout, ParcelHistoryEntry? history = null, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _factory.OpenAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+        await DeleteCurrentDeskLayoutAsync(connection, transaction, parcelId, cancellationToken);
+        await InsertDeskLayoutAsync(connection, transaction, layout, cancellationToken);
+        if (history is not null)
+        {
+            await InsertHistoryAsync(connection, transaction, history, cancellationToken);
+            await TouchParcelAsync(connection, transaction, parcelId, history.Timestamp, cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task DeleteDeskLayoutAsync(Guid parcelId, ParcelHistoryEntry? history = null, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _factory.OpenAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+        await DeleteCurrentDeskLayoutAsync(connection, transaction, parcelId, cancellationToken);
+        if (history is not null)
+        {
+            await InsertHistoryAsync(connection, transaction, history, cancellationToken);
+            await TouchParcelAsync(connection, transaction, parcelId, history.Timestamp, cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task InsertHistoryOnlyAsync(ParcelHistoryEntry history, CancellationToken cancellationToken = default)
+    {
+        await using var connection = await _factory.OpenAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+        await InsertHistoryAsync(connection, transaction, history, cancellationToken);
+        await TouchParcelAsync(connection, transaction, history.ParcelId, history.Timestamp, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
 
@@ -387,6 +431,169 @@ VALUES($id,$parcel,$type,$name,$value,$identity,$detail,$created,$updated,$verif
         command.Parameters.AddWithValue("$launchEnabled", item.LaunchEnabled ? 1 : 0); command.Parameters.AddWithValue("$closeSupported", item.CloseSupported ? 1 : 0);
         command.Parameters.AddWithValue("$browserFamily", DbValue.Db(item.BrowserFamily)); command.Parameters.AddWithValue("$browserDomain", DbValue.Db(item.BrowserDomain)); command.Parameters.AddWithValue("$browserWindowGroupId", DbValue.Db(item.BrowserWindowGroupId)); command.Parameters.AddWithValue("$browserTabIndex", DbValue.Db(item.BrowserTabIndex)); command.Parameters.AddWithValue("$browserPinned", item.BrowserPinned ? 1 : 0); command.Parameters.AddWithValue("$browserActive", item.BrowserActive ? 1 : 0); command.Parameters.AddWithValue("$browserTabGroupId", DbValue.Db(item.BrowserTabGroupId)); command.Parameters.AddWithValue("$browserTabGroupTitle", DbValue.Db(item.BrowserTabGroupTitle)); command.Parameters.AddWithValue("$browserTabGroupColor", DbValue.Db(item.BrowserTabGroupColor)); command.Parameters.AddWithValue("$browserFaviconUrl", DbValue.Db(item.BrowserFaviconUrl)); command.Parameters.AddWithValue("$browserCapturedAt", DbValue.Db(DbValue.Time(item.BrowserCapturedAt))); command.Parameters.AddWithValue("$browserLastOpenedAt", DbValue.Db(DbValue.Time(item.BrowserLastOpenedAt)));
     }
+
+    private static async Task LoadDeskLayoutsAsync(SqliteConnection connection, Dictionary<Guid, Parcel> parcels, CancellationToken cancellationToken)
+    {
+        var layouts = new Dictionary<Guid, DeskLayoutSnapshot>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT Id, ParcelId, Name, CreatedAt, UpdatedAt, IsCurrent, IsEnabled, TopologySignature FROM DeskLayoutSnapshots WHERE IsCurrent = 1;";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var parcelId = Guid.Parse(reader["ParcelId"].ToString()!);
+                var layout = new DeskLayoutSnapshot
+                {
+                    Id = Guid.Parse(reader["Id"].ToString()!),
+                    ParcelId = parcelId,
+                    Name = reader["Name"].ToString()!,
+                    CreatedAt = DbValue.Time(reader["CreatedAt"]),
+                    UpdatedAt = DbValue.Time(reader["UpdatedAt"]),
+                    IsCurrent = Convert.ToInt32(reader["IsCurrent"]) == 1,
+                    IsEnabled = Convert.ToInt32(reader["IsEnabled"]) == 1,
+                    TopologySignature = reader["TopologySignature"].ToString() ?? string.Empty
+                };
+                layouts[layout.Id] = layout;
+                if (parcels.TryGetValue(parcelId, out var parcel)) parcel.DeskLayout = layout;
+            }
+        }
+
+        if (layouts.Count == 0) return;
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT * FROM DeskMonitors WHERE LayoutSnapshotId IN (SELECT Id FROM DeskLayoutSnapshots WHERE IsCurrent = 1) ORDER BY LayoutSnapshotId, CaptureOrder;";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var layoutId = Guid.Parse(reader["LayoutSnapshotId"].ToString()!);
+                if (!layouts.TryGetValue(layoutId, out var layout)) continue;
+                layout.Monitors.Add(new DeskMonitorLayout
+                {
+                    Id = Guid.Parse(reader["Id"].ToString()!),
+                    LayoutSnapshotId = layoutId,
+                    ParcelId = Guid.Parse(reader["ParcelId"].ToString()!),
+                    DeviceIdentifier = reader["DeviceIdentifier"].ToString()!,
+                    FriendlyName = reader["FriendlyName"].ToString()!,
+                    IsPrimary = Convert.ToInt32(reader["IsPrimary"]) == 1,
+                    Bounds = ReadRect(reader, "Bounds"),
+                    WorkArea = ReadRect(reader, "Work"),
+                    RelativeArrangement = reader["RelativeArrangement"].ToString() ?? string.Empty,
+                    DpiX = Convert.ToInt32(reader["DpiX"]),
+                    DpiY = Convert.ToInt32(reader["DpiY"]),
+                    Orientation = Convert.ToInt32(reader["Orientation"]),
+                    CaptureOrder = Convert.ToInt32(reader["CaptureOrder"]),
+                    CreatedAt = DbValue.Time(reader["CreatedAt"])
+                });
+            }
+        }
+
+        await using (var command = connection.CreateCommand())
+        {
+            command.CommandText = "SELECT * FROM DeskWindowLayouts WHERE LayoutSnapshotId IN (SELECT Id FROM DeskLayoutSnapshots WHERE IsCurrent = 1) ORDER BY LayoutSnapshotId, ZOrderRank, CreatedAt;";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                var layoutId = Guid.Parse(reader["LayoutSnapshotId"].ToString()!);
+                if (!layouts.TryGetValue(layoutId, out var layout)) continue;
+                layout.Windows.Add(new DeskWindowLayout
+                {
+                    Id = Guid.Parse(reader["Id"].ToString()!),
+                    LayoutSnapshotId = layoutId,
+                    ParcelId = Guid.Parse(reader["ParcelId"].ToString()!),
+                    ParcelItemId = NullableGuid(reader["ParcelItemId"]),
+                    ExecutableIdentity = reader["ExecutableIdentity"].ToString() ?? string.Empty,
+                    ApplicationIdentifier = NullText(reader["ApplicationIdentifier"]),
+                    ProcessName = reader["ProcessName"].ToString() ?? string.Empty,
+                    CapturedTitle = reader["CapturedTitle"].ToString() ?? string.Empty,
+                    NormalizedTitle = reader["NormalizedTitle"].ToString() ?? string.Empty,
+                    WindowClassName = NullText(reader["WindowClassName"]),
+                    SavedMonitorId = NullableGuid(reader["SavedMonitorId"]),
+                    AbsoluteBounds = ReadRect(reader, "Absolute"),
+                    NormalBounds = ReadRect(reader, "Normal"),
+                    RelativeLeft = Convert.ToDouble(reader["RelativeLeft"], System.Globalization.CultureInfo.InvariantCulture),
+                    RelativeTop = Convert.ToDouble(reader["RelativeTop"], System.Globalization.CultureInfo.InvariantCulture),
+                    RelativeWidth = Convert.ToDouble(reader["RelativeWidth"], System.Globalization.CultureInfo.InvariantCulture),
+                    RelativeHeight = Convert.ToDouble(reader["RelativeHeight"], System.Globalization.CultureInfo.InvariantCulture),
+                    WindowState = ParseDeskWindowState(reader["WindowState"]),
+                    ZOrderRank = Convert.ToInt32(reader["ZOrderRank"]),
+                    SourceDpiX = Convert.ToInt32(reader["SourceDpiX"]),
+                    SourceDpiY = Convert.ToInt32(reader["SourceDpiY"]),
+                    IsEnabled = Convert.ToInt32(reader["IsEnabled"]) == 1,
+                    IsSupported = Convert.ToInt32(reader["IsSupported"]) == 1,
+                    MatchMetadata = NullText(reader["MatchMetadata"]),
+                    LastMatchConfidence = ParseDeskMatchConfidence(reader["LastMatchConfidence"]),
+                    CreatedAt = DbValue.Time(reader["CreatedAt"]),
+                    UpdatedAt = DbValue.Time(reader["UpdatedAt"])
+                });
+            }
+        }
+    }
+
+    private static async Task DeleteCurrentDeskLayoutAsync(SqliteConnection connection, SqliteTransaction transaction, Guid parcelId, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM DeskLayoutSnapshots WHERE ParcelId=$parcel AND IsCurrent=1;";
+        command.Parameters.AddWithValue("$parcel", parcelId.ToString());
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    private static async Task InsertDeskLayoutAsync(SqliteConnection connection, SqliteTransaction transaction, DeskLayoutSnapshot layout, CancellationToken cancellationToken)
+    {
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = @"INSERT INTO DeskLayoutSnapshots(Id,ParcelId,Name,CreatedAt,UpdatedAt,IsCurrent,IsEnabled,TopologySignature)
+VALUES($id,$parcel,$name,$created,$updated,$current,$enabled,$signature);";
+            command.Parameters.AddWithValue("$id", layout.Id.ToString());
+            command.Parameters.AddWithValue("$parcel", layout.ParcelId.ToString());
+            command.Parameters.AddWithValue("$name", layout.Name);
+            command.Parameters.AddWithValue("$created", DbValue.Time(layout.CreatedAt));
+            command.Parameters.AddWithValue("$updated", DbValue.Time(layout.UpdatedAt));
+            command.Parameters.AddWithValue("$current", layout.IsCurrent ? 1 : 0);
+            command.Parameters.AddWithValue("$enabled", layout.IsEnabled ? 1 : 0);
+            command.Parameters.AddWithValue("$signature", layout.TopologySignature);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        foreach (var monitor in layout.Monitors)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = @"INSERT INTO DeskMonitors(Id,LayoutSnapshotId,ParcelId,DeviceIdentifier,FriendlyName,IsPrimary,
+BoundsLeft,BoundsTop,BoundsWidth,BoundsHeight,WorkLeft,WorkTop,WorkWidth,WorkHeight,RelativeArrangement,DpiX,DpiY,Orientation,CaptureOrder,CreatedAt)
+VALUES($id,$layout,$parcel,$device,$friendly,$primary,$bl,$bt,$bw,$bh,$wl,$wt,$ww,$wh,$arrangement,$dx,$dy,$orientation,$order,$created);";
+            command.Parameters.AddWithValue("$id", monitor.Id.ToString()); command.Parameters.AddWithValue("$layout", layout.Id.ToString()); command.Parameters.AddWithValue("$parcel", layout.ParcelId.ToString());
+            command.Parameters.AddWithValue("$device", monitor.DeviceIdentifier); command.Parameters.AddWithValue("$friendly", monitor.FriendlyName); command.Parameters.AddWithValue("$primary", monitor.IsPrimary ? 1 : 0);
+            AddRectParameters(command, "$b", monitor.Bounds); AddRectParameters(command, "$w", monitor.WorkArea);
+            command.Parameters.AddWithValue("$arrangement", monitor.RelativeArrangement); command.Parameters.AddWithValue("$dx", monitor.DpiX); command.Parameters.AddWithValue("$dy", monitor.DpiY); command.Parameters.AddWithValue("$orientation", monitor.Orientation); command.Parameters.AddWithValue("$order", monitor.CaptureOrder); command.Parameters.AddWithValue("$created", DbValue.Time(monitor.CreatedAt));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+        foreach (var window in layout.Windows)
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = @"INSERT INTO DeskWindowLayouts(Id,LayoutSnapshotId,ParcelId,ParcelItemId,ExecutableIdentity,ApplicationIdentifier,ProcessName,CapturedTitle,NormalizedTitle,WindowClassName,SavedMonitorId,
+AbsoluteLeft,AbsoluteTop,AbsoluteWidth,AbsoluteHeight,NormalLeft,NormalTop,NormalWidth,NormalHeight,RelativeLeft,RelativeTop,RelativeWidth,RelativeHeight,WindowState,ZOrderRank,SourceDpiX,SourceDpiY,IsEnabled,IsSupported,MatchMetadata,LastMatchConfidence,CreatedAt,UpdatedAt)
+VALUES($id,$layout,$parcel,$item,$executable,$app,$process,$title,$normalized,$class,$monitor,$abl,$abt,$abw,$abh,$nbl,$nbt,$nbw,$nbh,$rl,$rt,$rw,$rh,$state,$rank,$dx,$dy,$enabled,$supported,$metadata,$confidence,$created,$updated);";
+            command.Parameters.AddWithValue("$id", window.Id.ToString()); command.Parameters.AddWithValue("$layout", layout.Id.ToString()); command.Parameters.AddWithValue("$parcel", layout.ParcelId.ToString()); command.Parameters.AddWithValue("$item", DbValue.Db(window.ParcelItemId?.ToString()));
+            command.Parameters.AddWithValue("$executable", window.ExecutableIdentity); command.Parameters.AddWithValue("$app", DbValue.Db(window.ApplicationIdentifier)); command.Parameters.AddWithValue("$process", window.ProcessName); command.Parameters.AddWithValue("$title", window.CapturedTitle); command.Parameters.AddWithValue("$normalized", window.NormalizedTitle); command.Parameters.AddWithValue("$class", DbValue.Db(window.WindowClassName)); command.Parameters.AddWithValue("$monitor", DbValue.Db(window.SavedMonitorId?.ToString()));
+            AddRectParameters(command, "$ab", window.AbsoluteBounds); AddRectParameters(command, "$nb", window.NormalBounds);
+            command.Parameters.AddWithValue("$rl", window.RelativeLeft); command.Parameters.AddWithValue("$rt", window.RelativeTop); command.Parameters.AddWithValue("$rw", window.RelativeWidth); command.Parameters.AddWithValue("$rh", window.RelativeHeight); command.Parameters.AddWithValue("$state", window.WindowState.ToString()); command.Parameters.AddWithValue("$rank", window.ZOrderRank); command.Parameters.AddWithValue("$dx", window.SourceDpiX); command.Parameters.AddWithValue("$dy", window.SourceDpiY); command.Parameters.AddWithValue("$enabled", window.IsEnabled ? 1 : 0); command.Parameters.AddWithValue("$supported", window.IsSupported ? 1 : 0); command.Parameters.AddWithValue("$metadata", DbValue.Db(window.MatchMetadata)); command.Parameters.AddWithValue("$confidence", window.LastMatchConfidence.ToString()); command.Parameters.AddWithValue("$created", DbValue.Time(window.CreatedAt)); command.Parameters.AddWithValue("$updated", DbValue.Time(window.UpdatedAt));
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+    }
+
+    private static void AddRectParameters(SqliteCommand command, string prefix, DeskRect rect)
+    {
+        command.Parameters.AddWithValue(prefix + "l", rect.Left); command.Parameters.AddWithValue(prefix + "t", rect.Top); command.Parameters.AddWithValue(prefix + "w", rect.Width); command.Parameters.AddWithValue(prefix + "h", rect.Height);
+    }
+
+    private static DeskRect ReadRect(SqliteDataReader reader, string prefix) => new(
+        Convert.ToInt32(reader[prefix + "Left"]), Convert.ToInt32(reader[prefix + "Top"]), Convert.ToInt32(reader[prefix + "Width"]), Convert.ToInt32(reader[prefix + "Height"]));
+
+    private static Guid? NullableGuid(object value) => value is DBNull || string.IsNullOrWhiteSpace(value.ToString()) ? null : Guid.Parse(value.ToString()!);
+    private static DeskWindowState ParseDeskWindowState(object value) => Enum.TryParse<DeskWindowState>(value.ToString(), true, out var state) ? state : DeskWindowState.Unknown;
+    private static DeskMatchConfidence ParseDeskMatchConfidence(object value) => Enum.TryParse<DeskMatchConfidence>(value.ToString(), true, out var confidence) ? confidence : DeskMatchConfidence.NoMatch;
 
     private static Parcel ReadParcel(SqliteDataReader reader) => new()
     {

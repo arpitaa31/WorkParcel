@@ -32,7 +32,7 @@ INSERT INTO ParcelItems VALUES('22222222-2222-2222-2222-222222222222','11111111-
         var parcelCount = check.CreateCommand(); parcelCount.CommandText = "SELECT COUNT(*) FROM Parcels;";
         var itemTable = check.CreateCommand(); itemTable.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ParcelItems';";
         var migratedItems = check.CreateCommand(); migratedItems.CommandText = "SELECT ItemType || ':' || DisplayName FROM ParcelItems;";
-        Assert.Equal("5", (await version.ExecuteScalarAsync())?.ToString()); Assert.Equal(1L, await parcelCount.ExecuteScalarAsync()); Assert.Equal(1L, await itemTable.ExecuteScalarAsync()); Assert.Equal("File:old.txt", await migratedItems.ExecuteScalarAsync());
+        Assert.Equal(DatabaseInitializer.CurrentSchemaVersion.ToString(), (await version.ExecuteScalarAsync())?.ToString()); Assert.Equal(1L, await parcelCount.ExecuteScalarAsync()); Assert.Equal(1L, await itemTable.ExecuteScalarAsync()); Assert.Equal("File:old.txt", await migratedItems.ExecuteScalarAsync());
     }
 
     [Fact]
@@ -57,7 +57,7 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         var version = check.CreateCommand(); version.CommandText = "SELECT Value FROM SchemaInfo WHERE Key='SchemaVersion';";
         var parcelName = check.CreateCommand(); parcelName.CommandText = "SELECT Name FROM Parcels WHERE Id='11111111-1111-1111-1111-111111111111';";
         var browserDomain = check.CreateCommand(); browserDomain.CommandText = "SELECT BrowserDomain FROM ParcelItems WHERE Id='22222222-2222-2222-2222-222222222222';";
-        Assert.Equal("5", await version.ExecuteScalarAsync()); Assert.Equal("Part 3 parcel", await parcelName.ExecuteScalarAsync()); Assert.Equal("example.com", await browserDomain.ExecuteScalarAsync());
+        Assert.Equal(DatabaseInitializer.CurrentSchemaVersion.ToString(), await version.ExecuteScalarAsync()); Assert.Equal("Part 3 parcel", await parcelName.ExecuteScalarAsync()); Assert.Equal("example.com", await browserDomain.ExecuteScalarAsync());
     }
 
     [Fact]
@@ -159,8 +159,8 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(1, 42, "WorkParcel", "WorkParcel.App", null, "WorkParcel", true, false), 42));
         Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(2, 7, "Search", "SearchHost", null, "Search", true, false), 42));
         Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(3, 9, "Tool", "tool", null, "Tool", true, true), 42));
-        Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(5, 12, "Chrome", "chrome", @"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "Google Chrome", true, false), 42));
-        Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(6, 13, "Edge", "msedge", @"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "Microsoft Edge", true, false), 42));
+        Assert.True(OpenWindowService.ShouldInclude(new WindowCandidate(5, 12, "Chrome", "chrome", @"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "Google Chrome", true, false), 42));
+        Assert.True(OpenWindowService.ShouldInclude(new WindowCandidate(6, 13, "Edge", "msedge", @"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "Microsoft Edge", true, false), 42));
         Assert.True(OpenWindowService.ShouldInclude(new WindowCandidate(4, 11, "notes.txt - Notepad", "notepad", @"C:\Windows\notepad.exe", "Notepad", true, false), 42));
     }
 
@@ -173,7 +173,7 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         var link = new ParcelItem { ItemType = ParcelItemType.WebLink, DisplayName = "Docs", Value = "https://example.com", LaunchEnabled = true };
         var note = new ParcelItem { ItemType = ParcelItemType.Note, DisplayName = "Note", LaunchEnabled = false };
         var plan = new ItemLaunchService().BuildPlan(new[] { first, second, missing, link, note });
-        Assert.Equal(2, plan.Count); Assert.Contains(first, plan); Assert.Contains(link, plan); Assert.DoesNotContain(second, plan);
+        Assert.Equal(3, plan.Count); Assert.Contains(first, plan); Assert.Contains(second, plan); Assert.Contains(link, plan);
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Text.Json;
 using WorkParcel_App.Models;
 
 namespace WorkParcel_App.Services;
@@ -20,6 +21,7 @@ public sealed class WorkspaceStore : BindableBase
     private Parcel? _currentParcel;
     private int _parcelCount;
     private int _todayItemCount;
+    private DeskMemorySettings _deskMemorySettings = DeskMemorySettings.SafeDefaults;
 
     public static WorkspaceStore Current => _current.Value;
 
@@ -41,6 +43,7 @@ public sealed class WorkspaceStore : BindableBase
     public string Theme { get => _theme; set => Set(ref _theme, value); }
     public int ParcelCount { get => _parcelCount; private set => Set(ref _parcelCount, value); }
     public int TodayItemCount { get => _todayItemCount; private set => Set(ref _todayItemCount, value); }
+    public DeskMemorySettings DeskMemorySettings { get => _deskMemorySettings; private set => Set(ref _deskMemorySettings, value); }
     public long DatabaseSize => _repository.GetDatabaseSize();
     public DateTime? LastSuccessfulInitializationUtc => _initializer.LastSuccessfulInitializationUtc;
     public string DatabaseStatus => _initialized ? "READY" : "NOT INITIALIZED";
@@ -56,6 +59,12 @@ public sealed class WorkspaceStore : BindableBase
             ReplaceSnapshot(snapshot);
             var savedTheme = await _repository.GetSettingAsync("Theme", cancellationToken);
             if (savedTheme is "Dark" or "Light" or "System") _theme = savedTheme;
+            var savedDeskMemorySettings = await _repository.GetSettingAsync(DeskMemorySettings.SettingKey, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(savedDeskMemorySettings))
+            {
+                try { DeskMemorySettings = JsonSerializer.Deserialize<DeskMemorySettings>(savedDeskMemorySettings) ?? DeskMemorySettings.SafeDefaults; }
+                catch (JsonException) { DeskMemorySettings = DeskMemorySettings.SafeDefaults; }
+            }
             _initialized = true;
             OnPropertyChanged(nameof(DatabaseStatus));
         }
@@ -88,14 +97,15 @@ public sealed class WorkspaceStore : BindableBase
         return parcel;
     }
 
-    public async Task<Parcel> CreateWithItemsAsync(string name, string description, IReadOnlyList<ParcelItem> items, CancellationToken cancellationToken = default)
+    public async Task<Parcel> CreateWithItemsAsync(string name, string description, IReadOnlyList<ParcelItem> items, CancellationToken cancellationToken = default, DeskLayoutSnapshot? deskLayout = null, Guid? parcelId = null)
     {
         var cleanName = ValidateName(name); var cleanDescription = ValidateDescription(description); var now = DateTime.Now;
-        var parcel = new Parcel { Name = cleanName, Description = cleanDescription, Status = ParcelStatus.Packed, CreatedAt = now, UpdatedAt = now, LastPackedAt = now };
+        var parcel = new Parcel { Id = parcelId ?? Guid.NewGuid(), Name = cleanName, Description = cleanDescription, Status = ParcelStatus.Packed, CreatedAt = now, UpdatedAt = now, LastPackedAt = now };
         var prepared = PrepareItems(parcel, items, Array.Empty<ParcelItem>());
+        if (deskLayout is not null) PrepareDeskLayout(parcel, deskLayout);
         var history = NewHistory(parcel, ParcelHistoryEventType.ItemsCaptured, $"Parcel packed — {prepared.Count} item{(prepared.Count == 1 ? string.Empty : "s")} saved");
-        await _repository.InsertParcelWithItemsAsync(parcel, prepared, history, cancellationToken);
-        foreach (var item in prepared) parcel.Items.Add(item); parcel.History.Add(history); Parcels.Insert(0, parcel); ParcelCount++;
+        await _repository.InsertParcelWithItemsAsync(parcel, prepared, history, cancellationToken, deskLayout);
+        foreach (var item in prepared) parcel.Items.Add(item); parcel.DeskLayout = deskLayout; parcel.History.Add(history); Parcels.Insert(0, parcel); ParcelCount++;
         return parcel;
     }
 
@@ -132,14 +142,54 @@ public sealed class WorkspaceStore : BindableBase
         parcel.UpdatedAt = history.Timestamp; foreach (var item in selected) parcel.Items.Remove(item); parcel.History.Insert(0, history);
     }
 
-    public async Task ReplaceItemsAsync(Parcel parcel, IReadOnlyList<ParcelItem> selected, string summary, ParcelHistoryEventType eventType = ParcelHistoryEventType.Packed, CancellationToken cancellationToken = default)
+    public async Task ReplaceItemsAsync(Parcel parcel, IReadOnlyList<ParcelItem> selected, string summary, ParcelHistoryEventType eventType = ParcelHistoryEventType.Packed, CancellationToken cancellationToken = default, DeskLayoutSnapshot? deskLayout = null)
     {
-        var itemState = selected.Select(item => (Item: item, item.ParcelId, item.DisplayName, item.CreatedAt, item.UpdatedAt, item.SortOrder)).ToList(); var prepared = PrepareItems(parcel, selected, Array.Empty<ParcelItem>()); var now = DateTime.Now; var oldStatus = parcel.Status; var oldUpdated = parcel.UpdatedAt; var oldPacked = parcel.LastPackedAt;
+        var itemState = selected.Select(item => (Item: item, item.ParcelId, item.DisplayName, item.CreatedAt, item.UpdatedAt, item.SortOrder)).ToList(); var prepared = PrepareItems(parcel, selected, Array.Empty<ParcelItem>()); var now = DateTime.Now; var oldStatus = parcel.Status; var oldUpdated = parcel.UpdatedAt; var oldPacked = parcel.LastPackedAt; var oldLayout = parcel.DeskLayout;
+        if (deskLayout is not null) PrepareDeskLayout(parcel, deskLayout);
         parcel.Status = ParcelStatus.Packed; parcel.UpdatedAt = now; parcel.LastPackedAt = now;
         var history = NewHistory(parcel, eventType, summary);
-        try { await _repository.ReplaceItemsWithHistoryAsync(parcel, prepared, history, cancellationToken); }
-        catch { parcel.Status = oldStatus; parcel.UpdatedAt = oldUpdated; parcel.LastPackedAt = oldPacked; foreach (var old in itemState) { old.Item.ParcelId = old.ParcelId; old.Item.DisplayName = old.DisplayName; old.Item.CreatedAt = old.CreatedAt; old.Item.UpdatedAt = old.UpdatedAt; old.Item.SortOrder = old.SortOrder; } throw; }
-        parcel.Items.Clear(); foreach (var item in prepared) parcel.Items.Add(item); parcel.History.Insert(0, history); if (CurrentParcel?.Id == parcel.Id) CurrentParcel = null;
+        try { await _repository.ReplaceItemsWithHistoryAsync(parcel, prepared, history, cancellationToken, deskLayout); }
+        catch { parcel.Status = oldStatus; parcel.UpdatedAt = oldUpdated; parcel.LastPackedAt = oldPacked; parcel.DeskLayout = oldLayout; foreach (var old in itemState) { old.Item.ParcelId = old.ParcelId; old.Item.DisplayName = old.DisplayName; old.Item.CreatedAt = old.CreatedAt; old.Item.UpdatedAt = old.UpdatedAt; old.Item.SortOrder = old.SortOrder; } throw; }
+        parcel.Items.Clear(); foreach (var item in prepared) parcel.Items.Add(item); if (deskLayout is not null) parcel.DeskLayout = deskLayout; parcel.History.Insert(0, history); if (CurrentParcel?.Id == parcel.Id) CurrentParcel = null;
+    }
+
+    public async Task SaveDeskLayoutAsync(Parcel parcel, DeskLayoutSnapshot layout, string? summary = null, CancellationToken cancellationToken = default)
+    {
+        var previous = parcel.DeskLayout;
+        PrepareDeskLayout(parcel, layout);
+        var now = DateTime.Now;
+        if (layout.CreatedAt == default) layout.CreatedAt = now;
+        layout.UpdatedAt = now;
+        var history = NewHistory(parcel, previous is null ? ParcelHistoryEventType.DeskLayoutCaptured : ParcelHistoryEventType.DeskLayoutUpdated, summary ?? (previous is null ? "Desk layout remembered" : "Desk layout updated"));
+        var oldUpdated = parcel.UpdatedAt;
+        parcel.UpdatedAt = now;
+        try { await _repository.SaveDeskLayoutAsync(parcel.Id, layout, history, cancellationToken); }
+        catch { parcel.UpdatedAt = oldUpdated; throw; }
+        parcel.DeskLayout = layout;
+        parcel.History.Insert(0, history);
+    }
+
+    public async Task RemoveDeskLayoutAsync(Parcel parcel, CancellationToken cancellationToken = default)
+    {
+        if (parcel.DeskLayout is null) return;
+        var now = DateTime.Now;
+        var history = NewHistory(parcel, ParcelHistoryEventType.DeskLayoutRemoved, "Desk layout removed; parcel items were kept");
+        var oldUpdated = parcel.UpdatedAt;
+        parcel.UpdatedAt = now;
+        try { await _repository.DeleteDeskLayoutAsync(parcel.Id, history, cancellationToken); }
+        catch { parcel.UpdatedAt = oldUpdated; throw; }
+        parcel.DeskLayout = null;
+        parcel.History.Insert(0, history);
+    }
+
+    public async Task RecordDeskLayoutRestoredAsync(Parcel parcel, string summary, CancellationToken cancellationToken = default)
+    {
+        var history = NewHistory(parcel, ParcelHistoryEventType.DeskLayoutRestored, summary);
+        var oldUpdated = parcel.UpdatedAt;
+        parcel.UpdatedAt = history.Timestamp;
+        try { await _repository.InsertHistoryOnlyAsync(history, cancellationToken); }
+        catch { parcel.UpdatedAt = oldUpdated; throw; }
+        parcel.History.Insert(0, history);
     }
 
     public async Task VerifyItemsAsync(Parcel parcel, CancellationToken cancellationToken = default)
@@ -275,6 +325,12 @@ public sealed class WorkspaceStore : BindableBase
     public Task<string> BackupAsync(CancellationToken cancellationToken = default) => _repository.BackupAsync(cancellationToken);
     public Task<(int Parcels, int TodayItems)> GetCountsAsync(CancellationToken cancellationToken = default) => _repository.GetCountsAsync(cancellationToken);
     public Task SetThemeAsync(string theme, CancellationToken cancellationToken = default) { Theme = theme; return _repository.SetSettingAsync("Theme", theme, cancellationToken); }
+    public async Task SetDeskMemorySettingsAsync(DeskMemorySettings settings, CancellationToken cancellationToken = default)
+    {
+        var normalized = settings with { RestorationTimeoutSeconds = Math.Clamp(settings.RestorationTimeoutSeconds, 2, 120) };
+        await _repository.SetSettingAsync(DeskMemorySettings.SettingKey, JsonSerializer.Serialize(normalized), cancellationToken);
+        DeskMemorySettings = normalized;
+    }
     public void SetCurrent(Parcel? parcel) => CurrentParcel = parcel;
 
     private static ParcelHistoryEntry NewHistory(Parcel parcel, ParcelHistoryEventType type, string summary) => new()
@@ -296,6 +352,21 @@ public sealed class WorkspaceStore : BindableBase
             result.Add(item);
         }
         return result;
+    }
+    private static void PrepareDeskLayout(Parcel parcel, DeskLayoutSnapshot layout)
+    {
+        layout.ParcelId = parcel.Id;
+        layout.IsCurrent = true;
+        foreach (var monitor in layout.Monitors)
+        {
+            monitor.LayoutSnapshotId = layout.Id;
+            monitor.ParcelId = parcel.Id;
+        }
+        foreach (var window in layout.Windows)
+        {
+            window.LayoutSnapshotId = layout.Id;
+            window.ParcelId = parcel.Id;
+        }
     }
     private static string ValidateName(string name) { var clean = name?.Trim() ?? string.Empty; if (clean.Length == 0) throw new ArgumentException("A parcel name is required.", nameof(name)); if (clean.Length > 80) throw new ArgumentException("Parcel names must be 80 characters or fewer.", nameof(name)); return clean; }
     private static string ValidateItemName(string name) { var clean = name?.Trim() ?? string.Empty; if (clean.Length == 0) throw new ArgumentException("An item name is required.", nameof(name)); if (clean.Length > 160) throw new ArgumentException("Item names must be 160 characters or fewer.", nameof(name)); return clean; }

@@ -43,7 +43,7 @@ public sealed class SqliteConnectionFactory
 
 public sealed class DatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
     private readonly SqliteConnectionFactory _factory;
     private readonly AppLogger _logger;
 
@@ -97,6 +97,14 @@ public sealed class DatabaseInitializer
             {
                 await MigrateToV5Async(connection, transaction, cancellationToken);
                 await SetVersionAsync(connection, transaction, 5, cancellationToken);
+                version = 5;
+            }
+
+            if (version < 6)
+            {
+                await MigrateToV6Async(connection, transaction, cancellationToken);
+                await SetVersionAsync(connection, transaction, 6, cancellationToken);
+                version = 6;
             }
 
             await transaction.CommitAsync(cancellationToken);
@@ -312,6 +320,96 @@ DROP TABLE ParcelItems_V3;";
         var columns = await ReadColumnsAsync(connection, transaction, "ParcelItems", cancellationToken);
         if (!columns.Contains("BrowserDomain", StringComparer.OrdinalIgnoreCase)) await ExecuteAsync(connection, transaction, "ALTER TABLE ParcelItems ADD COLUMN BrowserDomain TEXT NULL;", cancellationToken);
         await ExecuteAsync(connection, transaction, "UPDATE ParcelItems SET BrowserDomain = SecondaryDetail WHERE ItemType = 'BrowserTab' AND BrowserDomain IS NULL;", cancellationToken);
+    }
+
+    private static async Task MigrateToV6Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        const string sql = @"
+DROP INDEX IF EXISTS UX_ParcelItems_Identity;
+CREATE UNIQUE INDEX IF NOT EXISTS UX_ParcelItems_Identity ON ParcelItems(ParcelId, ItemType, NormalizedIdentity) WHERE NormalizedIdentity IS NOT NULL AND ItemType <> 'ApplicationWindow';
+CREATE TABLE IF NOT EXISTS DeskLayoutSnapshots (
+    Id TEXT PRIMARY KEY,
+    ParcelId TEXT NOT NULL,
+    Name TEXT NOT NULL DEFAULT 'Desk Memory',
+    CreatedAt TEXT NOT NULL,
+    UpdatedAt TEXT NOT NULL,
+    IsCurrent INTEGER NOT NULL DEFAULT 1 CHECK(IsCurrent IN (0,1)),
+    IsEnabled INTEGER NOT NULL DEFAULT 1 CHECK(IsEnabled IN (0,1)),
+    TopologySignature TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY(ParcelId) REFERENCES Parcels(Id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS UX_DeskLayoutSnapshots_Current ON DeskLayoutSnapshots(ParcelId) WHERE IsCurrent = 1;
+CREATE INDEX IF NOT EXISTS IX_DeskLayoutSnapshots_Parcel_Updated ON DeskLayoutSnapshots(ParcelId, UpdatedAt DESC);
+
+CREATE TABLE IF NOT EXISTS DeskMonitors (
+    Id TEXT PRIMARY KEY,
+    LayoutSnapshotId TEXT NOT NULL,
+    ParcelId TEXT NOT NULL,
+    DeviceIdentifier TEXT NOT NULL,
+    FriendlyName TEXT NOT NULL DEFAULT '',
+    IsPrimary INTEGER NOT NULL DEFAULT 0 CHECK(IsPrimary IN (0,1)),
+    BoundsLeft INTEGER NOT NULL,
+    BoundsTop INTEGER NOT NULL,
+    BoundsWidth INTEGER NOT NULL,
+    BoundsHeight INTEGER NOT NULL,
+    WorkLeft INTEGER NOT NULL,
+    WorkTop INTEGER NOT NULL,
+    WorkWidth INTEGER NOT NULL,
+    WorkHeight INTEGER NOT NULL,
+    RelativeArrangement TEXT NOT NULL DEFAULT '',
+    DpiX INTEGER NOT NULL DEFAULT 96,
+    DpiY INTEGER NOT NULL DEFAULT 96,
+    Orientation INTEGER NOT NULL DEFAULT 0,
+    CaptureOrder INTEGER NOT NULL DEFAULT 0,
+    CreatedAt TEXT NOT NULL,
+    FOREIGN KEY(LayoutSnapshotId) REFERENCES DeskLayoutSnapshots(Id) ON DELETE CASCADE,
+    FOREIGN KEY(ParcelId) REFERENCES Parcels(Id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS IX_DeskMonitors_Snapshot_Order ON DeskMonitors(LayoutSnapshotId, CaptureOrder);
+
+CREATE TABLE IF NOT EXISTS DeskWindowLayouts (
+    Id TEXT PRIMARY KEY,
+    LayoutSnapshotId TEXT NOT NULL,
+    ParcelId TEXT NOT NULL,
+    ParcelItemId TEXT NULL,
+    ExecutableIdentity TEXT NOT NULL DEFAULT '',
+    ApplicationIdentifier TEXT NULL,
+    ProcessName TEXT NOT NULL DEFAULT '',
+    CapturedTitle TEXT NOT NULL DEFAULT '',
+    NormalizedTitle TEXT NOT NULL DEFAULT '',
+    WindowClassName TEXT NULL,
+    SavedMonitorId TEXT NULL,
+    AbsoluteLeft INTEGER NOT NULL,
+    AbsoluteTop INTEGER NOT NULL,
+    AbsoluteWidth INTEGER NOT NULL,
+    AbsoluteHeight INTEGER NOT NULL,
+    NormalLeft INTEGER NOT NULL,
+    NormalTop INTEGER NOT NULL,
+    NormalWidth INTEGER NOT NULL,
+    NormalHeight INTEGER NOT NULL,
+    RelativeLeft REAL NOT NULL DEFAULT 0,
+    RelativeTop REAL NOT NULL DEFAULT 0,
+    RelativeWidth REAL NOT NULL DEFAULT 0,
+    RelativeHeight REAL NOT NULL DEFAULT 0,
+    WindowState TEXT NOT NULL DEFAULT 'Normal',
+    ZOrderRank INTEGER NOT NULL DEFAULT 0,
+    SourceDpiX INTEGER NOT NULL DEFAULT 96,
+    SourceDpiY INTEGER NOT NULL DEFAULT 96,
+    IsEnabled INTEGER NOT NULL DEFAULT 1 CHECK(IsEnabled IN (0,1)),
+    IsSupported INTEGER NOT NULL DEFAULT 1 CHECK(IsSupported IN (0,1)),
+    MatchMetadata TEXT NULL,
+    LastMatchConfidence TEXT NOT NULL DEFAULT 'NoMatch',
+    CreatedAt TEXT NOT NULL,
+    UpdatedAt TEXT NOT NULL,
+    FOREIGN KEY(LayoutSnapshotId) REFERENCES DeskLayoutSnapshots(Id) ON DELETE CASCADE,
+    FOREIGN KEY(ParcelId) REFERENCES Parcels(Id) ON DELETE CASCADE,
+    FOREIGN KEY(ParcelItemId) REFERENCES ParcelItems(Id) ON DELETE SET NULL,
+    FOREIGN KEY(SavedMonitorId) REFERENCES DeskMonitors(Id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS IX_DeskWindowLayouts_Snapshot_Order ON DeskWindowLayouts(LayoutSnapshotId, ZOrderRank, CreatedAt);
+CREATE INDEX IF NOT EXISTS IX_DeskWindowLayouts_Parcel_Item ON DeskWindowLayouts(ParcelId, ParcelItemId);
+";
+        await ExecuteAsync(connection, transaction, sql, cancellationToken);
     }
 
     private static async Task<HashSet<string>> ReadColumnsAsync(SqliteConnection connection, SqliteTransaction transaction, string table, CancellationToken cancellationToken)
