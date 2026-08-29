@@ -39,7 +39,7 @@ public sealed class NativeDeskWindowProvider : IDeskWindowProvider
             var currentRank = rank++;
             try
             {
-                if (!IsEligibleWindow(handle, out var processId, out var processName, out var executablePath, out var title)) return true;
+                if (!IsEligibleWindow(handle, out var processId, out var processName, out var executablePath, out var title, out var processStartTimeUtc)) return true;
                 if (!NativeMethods.GetWindowRect(handle, out var windowRect)) return true;
                 var monitorHandle = NativeMethods.MonitorFromWindow(handle, NativeMethods.MonitorDefaultToNearest);
                 if (!byNativeHandle.TryGetValue(monitorHandle, out var monitor))
@@ -57,7 +57,7 @@ public sealed class NativeDeskWindowProvider : IDeskWindowProvider
                 if (dpi == 0) dpi = NativeMethods.GetDpiForSystem();
                 if (dpi > 0 && !dpiByDevice.ContainsKey(monitor.DeviceIdentifier)) dpiByDevice[monitor.DeviceIdentifier] = (int)dpi;
                 var className = ReadClassName(handle);
-                windows.Add(new DeskLiveWindow(
+                var live = new DeskLiveWindow(
                     handle,
                     processId,
                     title,
@@ -74,7 +74,12 @@ public sealed class NativeDeskWindowProvider : IDeskWindowProvider
                     (int)dpi,
                     true,
                     false,
-                    currentRank));
+                    currentRank)
+                {
+                    IsTopmost = (NativeMethods.GetWindowLongPtr(handle, NativeMethods.GwlExStyle).ToInt64() & NativeMethods.WsExTopmost) != 0,
+                    ProcessStartTimeUtc = processStartTimeUtc
+                };
+                windows.Add(live);
             }
             catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or ArgumentException or UnauthorizedAccessException)
             {
@@ -105,7 +110,7 @@ public sealed class NativeDeskWindowProvider : IDeskWindowProvider
     public bool TryApplyPlacement(nint handle, DeskResolvedPlacement placement, out string error)
     {
         error = string.Empty;
-        if (handle == nint.Zero || !NativeMethods.IsWindow(handle))
+        if (!IsSafeTopLevelWindow(handle))
         {
             error = "The target window is no longer available.";
             return false;
@@ -123,8 +128,9 @@ public sealed class NativeDeskWindowProvider : IDeskWindowProvider
                 // ShowWindow returns the previous visibility state, not an error.
                 // SetWindowPos below is the operation whose last error we inspect.
             }
-            var flags = NativeMethods.SetWindowPosNoActivate | NativeMethods.SetWindowPosNoOwnerZOrder | NativeMethods.SetWindowPosShowWindow;
-            if (!NativeMethods.SetWindowPos(handle, nint.Zero, bounds.Left, bounds.Top, bounds.Width, bounds.Height, flags))
+            var insertAfter = placement.IsTopmost ? new nint(NativeMethods.HwndTopmost) : new nint(NativeMethods.HwndNoTopmost);
+            var flags = NativeMethods.SetWindowPosNoActivate | NativeMethods.SetWindowPosShowWindow;
+            if (!NativeMethods.SetWindowPos(handle, insertAfter, bounds.Left, bounds.Top, bounds.Width, bounds.Height, flags))
             {
                 var code = Marshal.GetLastWin32Error();
                 error = code == NativeMethods.AccessDenied ? "Windows denied moving this window (it may be elevated)." : $"Windows could not move this window (error {code}).";
@@ -139,6 +145,7 @@ public sealed class NativeDeskWindowProvider : IDeskWindowProvider
             {
                 NativeMethods.ShowWindow(handle, NativeMethods.ShowMinimize);
             }
+            if (!VerifyPlacement(handle, placement, out error) && !error.Contains("adjusted", StringComparison.OrdinalIgnoreCase)) return false;
             return true;
         }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or UnauthorizedAccessException)
@@ -151,12 +158,41 @@ public sealed class NativeDeskWindowProvider : IDeskWindowProvider
         }
     }
 
-    private static bool IsEligibleWindow(nint handle, out uint processId, out string processName, out string? executablePath, out string title)
+    private static bool IsSafeTopLevelWindow(nint handle)
+    {
+        if (handle == nint.Zero || !NativeMethods.IsWindow(handle)) return false;
+        if (NativeMethods.GetAncestor(handle, NativeMethods.GetAncestorRoot) != handle) return false;
+        if (NativeMethods.GetWindow(handle, NativeMethods.GetWindowOwner) != nint.Zero) return false;
+        var style = NativeMethods.GetWindowLongPtr(handle, NativeMethods.GwlExStyle).ToInt64();
+        return (style & NativeMethods.WsExToolWindow) == 0;
+    }
+
+    private static bool VerifyPlacement(nint handle, DeskResolvedPlacement placement, out string error)
+    {
+        error = string.Empty;
+        if (!NativeMethods.GetWindowRect(handle, out var rect))
+        {
+            error = "Windows moved the target but its final geometry could not be verified.";
+            return false;
+        }
+        var observed = ToDeskRect(rect);
+        if (placement.State == DeskWindowState.Normal &&
+            (Math.Abs(observed.Left - placement.NormalBounds.Left) > 16 || Math.Abs(observed.Top - placement.NormalBounds.Top) > 16 ||
+             Math.Abs(observed.Width - placement.NormalBounds.Width) > 16 || Math.Abs(observed.Height - placement.NormalBounds.Height) > 16))
+        {
+            error = "Windows adjusted the saved window geometry; it will be retried once.";
+            return false;
+        }
+        return true;
+    }
+
+    private static bool IsEligibleWindow(nint handle, out uint processId, out string processName, out string? executablePath, out string title, out DateTime? processStartTimeUtc)
     {
         processId = 0;
         processName = string.Empty;
         executablePath = null;
         title = string.Empty;
+        processStartTimeUtc = null;
         if (!NativeMethods.IsWindowVisible(handle) || NativeMethods.GetWindowTextLength(handle) <= 0) return false;
         if (NativeMethods.GetAncestor(handle, NativeMethods.GetAncestorRoot) != handle) return false;
         if (NativeMethods.GetWindow(handle, NativeMethods.GetWindowOwner) != nint.Zero) return false;
@@ -170,6 +206,8 @@ public sealed class NativeDeskWindowProvider : IDeskWindowProvider
         {
             using var process = Process.GetProcessById((int)processId);
             processName = process.ProcessName;
+            try { processStartTimeUtc = process.StartTime.ToUniversalTime(); }
+            catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or UnauthorizedAccessException) { }
             if (SystemProcessNoise.Contains(processName)) return false;
             try { executablePath = process.MainModule?.FileName; }
             catch (Exception exception) when (exception is Win32Exception or InvalidOperationException or NotSupportedException or UnauthorizedAccessException) { }
@@ -199,8 +237,8 @@ public sealed class NativeDeskWindowProvider : IDeskWindowProvider
                         (info.Flags & NativeMethods.MonitorPrimary) != 0,
                         ToDeskRect(info.Monitor),
                         ToDeskRect(info.Work),
-                        (int)Math.Max(1u, NativeMethods.GetDpiForSystem()),
-                        (int)Math.Max(1u, NativeMethods.GetDpiForSystem()),
+                        ReadMonitorDpi(monitorHandle),
+                        ReadMonitorDpi(monitorHandle),
                         0,
                         monitors.Count)));
             }
@@ -218,6 +256,17 @@ public sealed class NativeDeskWindowProvider : IDeskWindowProvider
         var device = new NativeMethods.DISPLAY_DEVICE { Size = Marshal.SizeOf<NativeMethods.DISPLAY_DEVICE>() };
         if (!NativeMethods.EnumDisplayDevices(deviceName, 0, ref device, 0)) return (string.Empty, string.Empty);
         return (device.DeviceId?.Trim() ?? string.Empty, device.DeviceString?.Trim() ?? string.Empty);
+    }
+
+    private static int ReadMonitorDpi(nint monitor)
+    {
+        try
+        {
+            if (NativeMethods.GetDpiForMonitor(monitor, NativeMethods.MdtEffectiveDpi, out var dpiX, out _) == 0 && dpiX > 0)
+                return (int)dpiX;
+        }
+        catch (Exception exception) when (exception is DllNotFoundException or EntryPointNotFoundException or SEHException) { }
+        return (int)Math.Max(1u, NativeMethods.GetDpiForSystem());
     }
 
     private static DeskRect NormalBoundsFromPlacement(NativeMethods.WINDOWPLACEMENT placement, DeskRect workArea, NativeMethods.RECT currentRect)
@@ -274,8 +323,10 @@ internal static partial class NativeMethods
     internal const int ShowMaximize = 3;
     internal const int ShowMinimizedMaximized = 7;
     internal const uint SetWindowPosNoActivate = 0x0010;
-    internal const uint SetWindowPosNoOwnerZOrder = 0x0200;
     internal const uint SetWindowPosShowWindow = 0x0040;
+    internal const long HwndTopmost = -1;
+    internal const long HwndNoTopmost = -2;
+    internal const int MdtEffectiveDpi = 0;
     internal const int AccessDenied = 5;
 
     [StructLayout(LayoutKind.Sequential)]
@@ -334,6 +385,7 @@ internal static partial class NativeMethods
     internal static extern bool EnumDisplayDevices(string? deviceName, uint deviceIndex, ref DISPLAY_DEVICE displayDevice, uint flags);
     [DllImport("user32.dll")] internal static extern uint GetDpiForWindow(nint window);
     [DllImport("user32.dll")] internal static extern uint GetDpiForSystem();
+    [DllImport("Shcore.dll")] internal static extern int GetDpiForMonitor(nint monitor, int dpiType, out uint dpiX, out uint dpiY);
     [DllImport("user32.dll")] internal static extern nint GetAncestor(nint window, uint flags);
     [DllImport("user32.dll")] internal static extern nint GetWindow(nint window, uint command);
     [DllImport("user32.dll", EntryPoint = "SetWindowPos", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]

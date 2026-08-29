@@ -43,7 +43,7 @@ public sealed class SqliteConnectionFactory
 
 public sealed class DatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 6;
+    public const int CurrentSchemaVersion = 9;
     private readonly SqliteConnectionFactory _factory;
     private readonly AppLogger _logger;
 
@@ -105,6 +105,27 @@ public sealed class DatabaseInitializer
                 await MigrateToV6Async(connection, transaction, cancellationToken);
                 await SetVersionAsync(connection, transaction, 6, cancellationToken);
                 version = 6;
+            }
+
+            if (version < 7)
+            {
+                await MigrateToV7Async(connection, transaction, cancellationToken);
+                await SetVersionAsync(connection, transaction, 7, cancellationToken);
+                version = 7;
+            }
+
+            if (version < 8)
+            {
+                await MigrateToV8Async(connection, transaction, cancellationToken);
+                await SetVersionAsync(connection, transaction, 8, cancellationToken);
+                version = 8;
+            }
+
+            if (version < 9)
+            {
+                await MigrateToV9Async(connection, transaction, cancellationToken);
+                await SetVersionAsync(connection, transaction, 9, cancellationToken);
+                version = 9;
             }
 
             await transaction.CommitAsync(cancellationToken);
@@ -410,6 +431,47 @@ CREATE INDEX IF NOT EXISTS IX_DeskWindowLayouts_Snapshot_Order ON DeskWindowLayo
 CREATE INDEX IF NOT EXISTS IX_DeskWindowLayouts_Parcel_Item ON DeskWindowLayouts(ParcelId, ParcelItemId);
 ";
         await ExecuteAsync(connection, transaction, sql, cancellationToken);
+    }
+
+    private static async Task MigrateToV7Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var columns = await ReadColumnsAsync(connection, transaction, "ParcelItems", cancellationToken);
+        var additions = new[]
+        {
+            (Name: "BrowserWindowLeft", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowLeft INTEGER NULL;"),
+            (Name: "BrowserWindowTop", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowTop INTEGER NULL;"),
+            (Name: "BrowserWindowWidth", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowWidth INTEGER NULL;"),
+            (Name: "BrowserWindowHeight", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowHeight INTEGER NULL;"),
+            (Name: "BrowserWindowState", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowState TEXT NULL;"),
+            (Name: "BrowserWindowFocused", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowFocused INTEGER NOT NULL DEFAULT 0 CHECK(BrowserWindowFocused IN (0,1));"),
+            (Name: "BrowserWindowDpiX", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowDpiX INTEGER NULL;"),
+            (Name: "BrowserWindowDpiY", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowDpiY INTEGER NULL;")
+        };
+        foreach (var addition in additions)
+            if (!columns.Contains(addition.Name, StringComparer.OrdinalIgnoreCase))
+                await ExecuteAsync(connection, transaction, addition.Sql, cancellationToken);
+    }
+
+    private static async Task MigrateToV8Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var columns = await ReadColumnsAsync(connection, transaction, "ParcelItems", cancellationToken);
+        if (!columns.Contains("WindowClassName", StringComparer.OrdinalIgnoreCase))
+            await ExecuteAsync(connection, transaction, "ALTER TABLE ParcelItems ADD COLUMN WindowClassName TEXT NULL;", cancellationToken);
+    }
+
+    private static async Task MigrateToV9Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var columns = await ReadColumnsAsync(connection, transaction, "DeskWindowLayouts", cancellationToken);
+        var additions = new[]
+        {
+            (Name: "MonitorDpiX", Sql: "ALTER TABLE DeskWindowLayouts ADD COLUMN MonitorDpiX INTEGER NOT NULL DEFAULT 96;"),
+            (Name: "MonitorDpiY", Sql: "ALTER TABLE DeskWindowLayouts ADD COLUMN MonitorDpiY INTEGER NOT NULL DEFAULT 96;"),
+            (Name: "IsTopmost", Sql: "ALTER TABLE DeskWindowLayouts ADD COLUMN IsTopmost INTEGER NOT NULL DEFAULT 0 CHECK(IsTopmost IN (0,1));"),
+            (Name: "CoordinatesArePhysicalPixels", Sql: "ALTER TABLE DeskWindowLayouts ADD COLUMN CoordinatesArePhysicalPixels INTEGER NOT NULL DEFAULT 1 CHECK(CoordinatesArePhysicalPixels IN (0,1));")
+        };
+        foreach (var addition in additions)
+            if (!columns.Contains(addition.Name, StringComparer.OrdinalIgnoreCase))
+                await ExecuteAsync(connection, transaction, addition.Sql, cancellationToken);
     }
 
     private static async Task<HashSet<string>> ReadColumnsAsync(SqliteConnection connection, SqliteTransaction transaction, string table, CancellationToken cancellationToken)

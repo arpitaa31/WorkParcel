@@ -126,6 +126,7 @@ public sealed class ParcelItem : BindableBase
     public string? LaunchArguments { get; set; }
     public string? WorkingDirectory { get; set; }
     public string? WindowTitle { get; set; }
+    public string? WindowClassName { get; set; }
     public string? ProcessName { get; set; }
     public string? ApplicationUserModelId { get; set; }
     public long? FileSize { get; set; }
@@ -150,9 +151,18 @@ public sealed class ParcelItem : BindableBase
     public string? BrowserSessionTabId { get; set; }
     public string? BrowserSessionWindowId { get; set; }
     public string? BrowserConnectionId { get; set; }
+    public int? BrowserWindowLeft { get; set; }
+    public int? BrowserWindowTop { get; set; }
+    public int? BrowserWindowWidth { get; set; }
+    public int? BrowserWindowHeight { get; set; }
+    public string? BrowserWindowState { get; set; }
+    public bool BrowserWindowFocused { get; set; }
+    public int? BrowserWindowDpiX { get; set; }
+    public int? BrowserWindowDpiY { get; set; }
 
     // Current window identity only. Never written to the database.
     public nint RuntimeWindowHandle { get; set; }
+    public uint RuntimeProcessId { get; set; }
 
     public string TypeLabel => ItemType switch
     {

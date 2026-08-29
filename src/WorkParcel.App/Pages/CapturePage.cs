@@ -136,6 +136,7 @@ public sealed partial class CapturePage : PageBase
     {
         _itemHost.Children.Clear(); UpdateSelectedText(); AddCategory("OPEN APPS & WINDOWS", _draft.Where(item => item.ItemType is ParcelItemType.ApplicationWindow or ParcelItemType.Application));
         var browserInfo = Ui.Stack(3); var chrome = BrowserIntegrationService.Current.GetStatus("chrome"); var edge = BrowserIntegrationService.Current.GetStatus("edge"); browserInfo.Children.Add(Ui.Mono($"CHROME   {BrowserStatusText(chrome)}   ·   EDGE   {BrowserStatusText(edge)}", 10, chrome.Status == BrowserConnectionStatus.Connected || edge.Status == BrowserConnectionStatus.Connected ? "#9BE28F" : "#F0B45B", true)); browserInfo.Children.Add(Ui.Text("Only non-private HTTP/HTTPS tabs are offered. Browser-internal pages stay out of the parcel.", 11, false, "#8D9CA2")); _itemHost.Children.Add(Ui.Card(browserInfo, 12));
+        var connectChrome = Ui.Button("CONNECT CHROME"); connectChrome.Click += (_, _) => Frame?.Navigate(typeof(SettingsPage)); browserInfo.Children.Add(connectChrome);
         AddBrowserTree(); AddCategory("BROWSER LINKS", _draft.Where(item => item.ItemType == ParcelItemType.WebLink)); AddCategory("FILES", _draft.Where(item => item.ItemType == ParcelItemType.File)); AddCategory("FOLDERS", _draft.Where(item => item.ItemType == ParcelItemType.Folder)); AddCategory("NOTES", _draft.Where(item => item.ItemType == ParcelItemType.Note));
     }
 
@@ -146,14 +147,15 @@ public sealed partial class CapturePage : PageBase
         foreach (var browser in tabs.GroupBy(item => item.BrowserFamily ?? "unknown", StringComparer.OrdinalIgnoreCase).OrderBy(group => group.Key))
         {
             var browserStack = Ui.Stack(3);
+            var windowNumber = 0;
             foreach (var window in browser.GroupBy(item => item.BrowserWindowGroupId ?? "window-0", StringComparer.OrdinalIgnoreCase).OrderBy(group => group.Key))
             {
-                var windowStack = Ui.Stack(2); var windowItems = window.ToList(); var controls = Ui.Row();
+                var windowStack = Ui.Stack(2); var windowItems = window.ToList(); var windowLabel = $"{browser.Key.ToUpperInvariant()} WINDOW {++windowNumber}"; var controls = Ui.Row();
                 var select = Ui.Button("SELECT WINDOW"); select.Click += (_, _) => { foreach (var item in windowItems) _selected.Add(item.Id); RebuildItemSections(); };
                 var clear = Ui.Button("CLEAR WINDOW"); clear.Click += (_, _) => { foreach (var item in windowItems) _selected.Remove(item.Id); RebuildItemSections(); };
-                controls.Children.Add(Ui.Mono($"{window.Key.ToUpperInvariant()}   {windowItems.Count} TAB{(windowItems.Count == 1 ? string.Empty : "S")}", 10, "#9BE28F", true)); controls.Children.Add(Ui.Spacer()); controls.Children.Add(select); controls.Children.Add(clear); windowStack.Children.Add(controls);
+                controls.Children.Add(Ui.Mono($"{windowLabel}   {windowItems.Count} TAB{(windowItems.Count == 1 ? string.Empty : "S")}", 10, "#9BE28F", true)); controls.Children.Add(Ui.Spacer()); controls.Children.Add(select); controls.Children.Add(clear); windowStack.Children.Add(controls);
                 foreach (var group in windowItems.GroupBy(item => item.BrowserTabGroupTitle ?? "UNGROUPED", StringComparer.OrdinalIgnoreCase).OrderBy(group => group.Key)) { var groupStack = Ui.Stack(1); groupStack.Children.Add(Ui.Mono(group.Key.ToUpperInvariant(), 9, "#8D9CA2", true)); foreach (var item in group.OrderBy(item => item.BrowserTabIndex ?? int.MaxValue)) groupStack.Children.Add(SelectionRow(item)); windowStack.Children.Add(groupStack); }
-                browserStack.Children.Add(new Expander { Header = Ui.Mono(window.Key.ToUpperInvariant(), 10, "#C8D2D5", true), IsExpanded = true, Content = windowStack });
+                browserStack.Children.Add(new Expander { Header = Ui.Mono(windowLabel, 10, "#C8D2D5", true), IsExpanded = true, Content = windowStack });
             }
             root.Children.Add(new Expander { Header = Ui.Mono($"{browser.Key.ToUpperInvariant()}   {browser.Count()} TABS", 11, "#9BE28F", true), IsExpanded = true, Content = browserStack });
         }
@@ -221,9 +223,16 @@ public sealed partial class CapturePage : PageBase
             var browserTask = BrowserIntegrationService.Current.ListTabsAsync(cancellationToken: _loadCancellation.Token);
             await Task.WhenAll(windowsTask, browserTask); var windows = await windowsTask; var browserTabs = await browserTask;
             foreach (var old in _draft.Where(item => _detected.Contains(item.Id) || _detectedBrowser.Contains(item.Id)).ToList()) { _draft.Remove(old); _selected.Remove(old.Id); _detected.Remove(old.Id); _detectedBrowser.Remove(old.Id); }
-            foreach (var savedItem in _draft.Where(item => item.ItemType == ParcelItemType.ApplicationWindow && !_detected.Contains(item.Id))) savedItem.RuntimeWindowHandle = nint.Zero;
-            foreach (var window in windows) { var saved = _draft.FirstOrDefault(item => item.ItemType == ParcelItemType.ApplicationWindow && item.RuntimeWindowHandle == nint.Zero && item.NormalizedIdentity is not null && string.Equals(item.NormalizedIdentity, window.NormalizedIdentity, StringComparison.OrdinalIgnoreCase)); if (saved is not null) { saved.RuntimeWindowHandle = window.RuntimeWindowHandle; saved.CloseSupported = true; continue; } _draft.Add(window); _selected.Add(window.Id); _detected.Add(window.Id); }
-            var skippedTabs = 0; foreach (var tab in browserTabs) { if (!BrowserTabRules.IsAllowedForCapture(tab)) { skippedTabs++; continue; } var candidate = BrowserIntegrationService.FromTab(_editing?.Id ?? Guid.Empty, tab, _draft.Count, null); var saved = _draft.FirstOrDefault(item => item.ItemType == ParcelItemType.BrowserTab && string.Equals(item.NormalizedIdentity, candidate.NormalizedIdentity, StringComparison.Ordinal)); if (saved is not null) { saved.BrowserSessionTabId = tab.SessionTabId; saved.BrowserSessionWindowId = tab.SessionWindowId; saved.BrowserConnectionId = tab.ConnectionId; saved.BrowserTabIndex = tab.TabIndex; saved.BrowserPinned = tab.Pinned; saved.BrowserActive = tab.Active; saved.BrowserTabGroupId = BrowserTabRules.StableGroupIdentity(tab.Browser, tab.WindowGroupKey, tab.GroupTitle, tab.GroupColor); saved.BrowserTabGroupTitle = tab.GroupTitle; saved.BrowserTabGroupColor = tab.GroupColor; saved.LaunchEnabled = tab.CanRestore; saved.IsInaccessible = !tab.CanRestore; continue; } _draft.Add(candidate); _selected.Add(candidate.Id); _detectedBrowser.Add(candidate.Id); }
+            foreach (var savedItem in _draft.Where(item => item.ItemType == ParcelItemType.ApplicationWindow && !_detected.Contains(item.Id))) { savedItem.RuntimeWindowHandle = nint.Zero; savedItem.RuntimeProcessId = 0; }
+            var matchedWindowHandles = new HashSet<nint>();
+            foreach (var match in OpenWindowService.MatchSavedItems(_draft, windows).Where(match => match.Live is not null))
+            {
+                var live = windows.FirstOrDefault(item => item.RuntimeWindowHandle == match.Live!.Handle);
+                if (live is null) continue;
+                match.Item.RuntimeWindowHandle = live.RuntimeWindowHandle; match.Item.RuntimeProcessId = live.RuntimeProcessId; match.Item.CloseSupported = true; match.Item.WindowClassName = live.WindowClassName; matchedWindowHandles.Add(live.RuntimeWindowHandle);
+            }
+            foreach (var window in windows.Where(window => !matchedWindowHandles.Contains(window.RuntimeWindowHandle))) { _draft.Add(window); _detected.Add(window.Id); }
+            var skippedTabs = 0; var matchedBrowserIds = new HashSet<Guid>(); var browserGroups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); foreach (var savedItem in _draft.Where(item => item.ItemType == ParcelItemType.BrowserTab)) { savedItem.BrowserSessionTabId = null; savedItem.BrowserSessionWindowId = null; savedItem.BrowserConnectionId = null; savedItem.CloseSupported = false; } foreach (var tab in browserTabs) { if (!BrowserTabRules.IsAllowedForCapture(tab)) { skippedTabs++; continue; } var saved = BrowserIntegrationService.FindSavedTab(_draft, tab, matchedBrowserIds, browserGroups); if (saved is not null) { matchedBrowserIds.Add(saved.Id); BrowserIntegrationService.ApplyLiveTab(saved, tab); continue; } var candidate = BrowserIntegrationService.FromTab(_editing?.Id ?? Guid.Empty, tab, _draft.Count, null); _draft.Add(candidate); _detectedBrowser.Add(candidate.Id); }
             _loadedItems = true; _workStatus.Text = $"{windows.Count} WINDOWS · {browserTabs.Count - skippedTabs} TABS"; RebuildItemSections();
         }
         catch (OperationCanceledException) { _workStatus.Text = "REFRESH CANCELED"; }

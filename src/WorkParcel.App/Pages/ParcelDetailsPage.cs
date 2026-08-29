@@ -439,7 +439,7 @@ public sealed partial class ParcelDetailsPage : PageBase
     {
         var clone = new DeskLayoutSnapshot { Id = source.Id, ParcelId = source.ParcelId, Name = source.Name, CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, IsCurrent = source.IsCurrent, IsEnabled = source.IsEnabled, TopologySignature = source.TopologySignature };
         foreach (var monitor in source.Monitors) clone.Monitors.Add(new DeskMonitorLayout { Id = monitor.Id, LayoutSnapshotId = monitor.LayoutSnapshotId, ParcelId = monitor.ParcelId, DeviceIdentifier = monitor.DeviceIdentifier, FriendlyName = monitor.FriendlyName, IsPrimary = monitor.IsPrimary, Bounds = monitor.Bounds, WorkArea = monitor.WorkArea, RelativeArrangement = monitor.RelativeArrangement, DpiX = monitor.DpiX, DpiY = monitor.DpiY, Orientation = monitor.Orientation, CaptureOrder = monitor.CaptureOrder, CreatedAt = monitor.CreatedAt });
-        foreach (var window in source.Windows) clone.Windows.Add(new DeskWindowLayout { Id = window.Id, LayoutSnapshotId = window.LayoutSnapshotId, ParcelId = window.ParcelId, ParcelItemId = window.ParcelItemId, ExecutableIdentity = window.ExecutableIdentity, ApplicationIdentifier = window.ApplicationIdentifier, ProcessName = window.ProcessName, CapturedTitle = window.CapturedTitle, NormalizedTitle = window.NormalizedTitle, WindowClassName = window.WindowClassName, SavedMonitorId = window.SavedMonitorId, AbsoluteBounds = window.AbsoluteBounds, NormalBounds = window.NormalBounds, RelativeLeft = window.RelativeLeft, RelativeTop = window.RelativeTop, RelativeWidth = window.RelativeWidth, RelativeHeight = window.RelativeHeight, WindowState = window.WindowState, ZOrderRank = window.ZOrderRank, SourceDpiX = window.SourceDpiX, SourceDpiY = window.SourceDpiY, IsEnabled = window.IsEnabled, IsSupported = window.IsSupported, MatchMetadata = window.MatchMetadata, LastMatchConfidence = window.LastMatchConfidence, CreatedAt = window.CreatedAt, UpdatedAt = window.UpdatedAt });
+        foreach (var window in source.Windows) clone.Windows.Add(new DeskWindowLayout { Id = window.Id, LayoutSnapshotId = window.LayoutSnapshotId, ParcelId = window.ParcelId, ParcelItemId = window.ParcelItemId, ExecutableIdentity = window.ExecutableIdentity, ApplicationIdentifier = window.ApplicationIdentifier, ProcessName = window.ProcessName, CapturedTitle = window.CapturedTitle, NormalizedTitle = window.NormalizedTitle, WindowClassName = window.WindowClassName, SavedMonitorId = window.SavedMonitorId, AbsoluteBounds = window.AbsoluteBounds, NormalBounds = window.NormalBounds, RelativeLeft = window.RelativeLeft, RelativeTop = window.RelativeTop, RelativeWidth = window.RelativeWidth, RelativeHeight = window.RelativeHeight, WindowState = window.WindowState, ZOrderRank = window.ZOrderRank, SourceDpiX = window.SourceDpiX, SourceDpiY = window.SourceDpiY, MonitorDpiX = window.MonitorDpiX, MonitorDpiY = window.MonitorDpiY, IsTopmost = window.IsTopmost, CoordinatesArePhysicalPixels = window.CoordinatesArePhysicalPixels, IsEnabled = window.IsEnabled, IsSupported = window.IsSupported, MatchMetadata = window.MatchMetadata, LastMatchConfidence = window.LastMatchConfidence, CreatedAt = window.CreatedAt, UpdatedAt = window.UpdatedAt });
         return clone;
     }
 
@@ -478,36 +478,44 @@ public sealed partial class ParcelDetailsPage : PageBase
         try
         {
             var current = await _windows.DetectAsync(parcel.Id); var candidates = parcel.Items.ToList();
-            foreach (var savedItem in candidates.Where(item => item.ItemType == ParcelItemType.ApplicationWindow)) savedItem.RuntimeWindowHandle = nint.Zero;
-            foreach (var window in current)
+            foreach (var savedItem in candidates.Where(item => item.ItemType == ParcelItemType.ApplicationWindow)) { savedItem.RuntimeWindowHandle = nint.Zero; savedItem.RuntimeProcessId = 0; }
+            var matchedWindows = OpenWindowService.MatchSavedItems(candidates, current);
+            var matchedHandles = new HashSet<nint>();
+            foreach (var match in matchedWindows.Where(match => match.Live is not null))
             {
-                var saved = candidates.FirstOrDefault(item => item.ItemType == ParcelItemType.ApplicationWindow && item.RuntimeWindowHandle == nint.Zero && item.NormalizedIdentity is not null && string.Equals(item.NormalizedIdentity, window.NormalizedIdentity, StringComparison.OrdinalIgnoreCase));
-                if (saved is not null) { saved.RuntimeWindowHandle = window.RuntimeWindowHandle; saved.CloseSupported = true; }
-                else candidates.Add(window);
+                var live = current.FirstOrDefault(item => item.RuntimeWindowHandle == match.Live!.Handle);
+                if (live is null) continue;
+                match.Item.RuntimeWindowHandle = live.RuntimeWindowHandle; match.Item.RuntimeProcessId = live.RuntimeProcessId; match.Item.CloseSupported = true; match.Item.WindowClassName = live.WindowClassName; matchedHandles.Add(live.RuntimeWindowHandle);
             }
+            foreach (var window in current.Where(window => !matchedHandles.Contains(window.RuntimeWindowHandle))) candidates.Add(window);
             var browserTabs = await BrowserIntegrationService.Current.ListTabsAsync();
+            var matchedBrowserIds = new HashSet<Guid>(); var liveToSavedGroups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var tab in browserTabs.Where(tab => BrowserTabRules.IsAllowedForCapture(tab)))
             {
                 var candidate = BrowserIntegrationService.FromTab(parcel.Id, tab, candidates.Count, null);
-                var saved = candidates.FirstOrDefault(item => item.ItemType == ParcelItemType.BrowserTab && string.Equals(item.NormalizedIdentity, candidate.NormalizedIdentity, StringComparison.Ordinal));
-                if (saved is not null) { saved.BrowserSessionTabId = tab.SessionTabId; saved.BrowserSessionWindowId = tab.SessionWindowId; saved.BrowserConnectionId = tab.ConnectionId; saved.BrowserTabIndex = tab.TabIndex; saved.BrowserPinned = tab.Pinned; saved.BrowserActive = tab.Active; saved.BrowserTabGroupId = BrowserTabRules.StableGroupIdentity(tab.Browser, tab.WindowGroupKey, tab.GroupTitle, tab.GroupColor); saved.BrowserTabGroupTitle = tab.GroupTitle; saved.BrowserTabGroupColor = tab.GroupColor; saved.LaunchEnabled = tab.CanRestore; saved.IsInaccessible = !tab.CanRestore; saved.CloseSupported = true; }
-                else { candidate.CloseSupported = true; candidates.Add(candidate); }
+                var saved = BrowserIntegrationService.FindSavedTab(candidates, tab, matchedBrowserIds, liveToSavedGroups);
+                if (saved is not null) { BrowserIntegrationService.ApplyLiveTab(saved, tab, updateSavedWindowGroup: true); matchedBrowserIds.Add(saved.Id); }
+                else { candidate.CloseSupported = tab.CanRestore; candidates.Add(candidate); }
             }
             var checks = new Dictionary<ParcelItem, CheckBox>(); var stack = Ui.Stack(5); stack.Children.Add(Ui.Text("Choose what remains saved. Saving does not close anything unless you choose the close option.", 12, false, "#8D9CA2"));
             var updateDeskMemory = new CheckBox { Content = "UPDATE DESK MEMORY", IsChecked = parcel.DeskLayout?.IsEnabled == true || candidates.Any(item => item.ItemType == ParcelItemType.ApplicationWindow && item.RuntimeWindowHandle != nint.Zero), IsEnabled = candidates.Any(item => item.ItemType == ParcelItemType.ApplicationWindow && item.RuntimeWindowHandle != nint.Zero) }; stack.Children.Add(updateDeskMemory);
             var summary = Ui.Mono(string.Empty, 10, "#9BE28F", true); stack.Children.Add(summary);
             foreach (var item in candidates)
             {
-                var saved = parcel.Items.Any(existing => existing.Id == item.Id); var closeReady = item.ItemType == ParcelItemType.BrowserTab ? item.CloseSupported && !string.IsNullOrWhiteSpace(item.BrowserSessionTabId) && !string.IsNullOrWhiteSpace(item.BrowserSessionWindowId) : item.RuntimeWindowHandle != nint.Zero && item.CloseSupported; var source = saved ? "SAVED" : "NEW DETECTED"; var closeState = closeReady ? "CLOSE READY" : "CANNOT CLOSE";
-                var box = new CheckBox { Content = $"{source}   {item.DisplayName}   [{item.TypeLabel}]   {item.AvailabilityLabel}   [{closeState}]", IsChecked = true }; checks[item] = box; stack.Children.Add(box);
+                var saved = parcel.Items.Any(existing => existing.Id == item.Id); var closeReady = item.ItemType == ParcelItemType.BrowserTab ? item.CloseSupported && !string.IsNullOrWhiteSpace(item.BrowserSessionTabId) && !string.IsNullOrWhiteSpace(item.BrowserSessionWindowId) : WindowCloseRequestService.IsSafeCloseTarget(item); var source = saved ? "SAVED" : "NEW DETECTED"; var closeState = closeReady ? "CLOSE READY" : "CANNOT CLOSE";
+                var box = new CheckBox { Content = $"{source}   {item.DisplayName}   [{item.TypeLabel}]   {item.AvailabilityLabel}   [{closeState}]", IsChecked = saved }; checks[item] = box; stack.Children.Add(box);
             }
             void UpdateSummary() { var selectedNow = checks.Where(pair => pair.Value.IsChecked == true).Select(pair => pair.Key).ToList(); var additions = selectedNow.Count(item => parcel.Items.All(saved => saved.Id != item.Id)); var removalsNow = parcel.Items.Count(item => !selectedNow.Contains(item)); var missing = selectedNow.Count(item => item.IsMissing || item.IsInaccessible); summary.Text = $"{selectedNow.Count} SAVED  |  {additions} NEW  |  {removalsNow} REMOVED  |  {missing} UNAVAILABLE"; }
             foreach (var box in checks.Values) { box.Checked += (_, _) => UpdateSummary(); box.Unchecked += (_, _) => UpdateSummary(); } UpdateSummary();
-            var dialog = new ContentDialog { Title = "PACK AWAY", Content = new ScrollViewer { Content = stack, MaxHeight = 520 }, PrimaryButtonText = "SAVE SELECTION", SecondaryButtonText = BrowserIntegrationService.Current.TabClosingEnabled ? "SAVE AND CLOSE SELECTED" : "TAB CLOSING DISABLED", CloseButtonText = "CANCEL", DefaultButton = ContentDialogButton.Primary, XamlRoot = XamlRoot, IsSecondaryButtonEnabled = BrowserIntegrationService.Current.TabClosingEnabled };
+            var closeableAppCount = candidates.Count(item => item.ItemType == ParcelItemType.ApplicationWindow && WindowCloseRequestService.IsSafeCloseTarget(item));
+            var closeableTabCount = candidates.Count(item => item.ItemType == ParcelItemType.BrowserTab && item.CloseSupported && !string.IsNullOrWhiteSpace(item.BrowserSessionTabId) && !string.IsNullOrWhiteSpace(item.BrowserSessionWindowId));
+            var closeButtonEnabled = closeableAppCount > 0 || BrowserIntegrationService.Current.TabClosingEnabled && closeableTabCount > 0;
+            var secondaryText = BrowserIntegrationService.Current.TabClosingEnabled ? "SAVE AND CLOSE SELECTED" : closeableAppCount > 0 ? "SAVE AND CLOSE APPLICATION WINDOWS" : "BROWSER TAB CLOSING UNAVAILABLE";
+            var dialog = new ContentDialog { Title = "PACK AWAY", Content = new ScrollViewer { Content = stack, MaxHeight = 520 }, PrimaryButtonText = "SAVE SELECTION", SecondaryButtonText = secondaryText, CloseButtonText = "CANCEL", DefaultButton = ContentDialogButton.Primary, XamlRoot = XamlRoot, IsSecondaryButtonEnabled = closeButtonEnabled };
             var choice = await Ui.ShowDialog(dialog); if (choice == ContentDialogResult.None) return;
             var selected = checks.Where(pair => pair.Value.IsChecked == true).Select(pair => pair.Key).ToList(); var removals = parcel.Items.Count(item => !selected.Contains(item));
             if (removals > 0 && !await Dialogs.Confirm(this, "REMOVE SAVED ITEM RECORDS?", $"{removals} WorkParcel record{(removals == 1 ? string.Empty : "s")} will be removed. External resources stay untouched.", "REMOVE AND SAVE")) return;
-            var closeItems = selected.Where(item => item.RuntimeWindowHandle != nint.Zero && item.CloseSupported).ToList(); var closeTabs = selected.Where(item => item.ItemType == ParcelItemType.BrowserTab && item.CloseSupported && !string.IsNullOrWhiteSpace(item.BrowserSessionTabId) && !string.IsNullOrWhiteSpace(item.BrowserSessionWindowId)).ToList();
+            var closeItems = _closer.BuildPlan(selected); var closeTabs = selected.Where(item => item.ItemType == ParcelItemType.BrowserTab && item.CloseSupported && !string.IsNullOrWhiteSpace(item.BrowserSessionTabId) && !string.IsNullOrWhiteSpace(item.BrowserSessionWindowId)).ToList();
 
             DeskLayoutSnapshot? deskLayout = null; var deskMessage = "DESK MEMORY NOT UPDATED";
             if (updateDeskMemory.IsChecked == true && selected.Any(item => item.ItemType == ParcelItemType.ApplicationWindow))
@@ -531,7 +539,7 @@ public sealed partial class ParcelDetailsPage : PageBase
                 var tabSummary = $"{closeTabs.Count} browser tab{(closeTabs.Count == 1 ? string.Empty : "s")}"; var windowSummary = closeItems.Count == 0 ? string.Empty : $" and {closeItems.Count} application window{(closeItems.Count == 1 ? string.Empty : "s")}";
                 var warning = $"WorkParcel will ask to close {tabSummary}{windowSummary} after saving. Some webpages may contain unsaved work. Review before closing.";
                 if (!await Dialogs.Confirm(this, "CONFIRM CLOSE AFTER SAVE", warning, "SAVE AND CLOSE")) { await Dialogs.ShowMessage(this, "PARCEL SAVED", $"{selected.Count} ITEM{(selected.Count == 1 ? string.Empty : "S")} SAVED. No resource was closed."); Build(); return; }
-                var closeResults = await _closer.RequestCloseAsync(closeItems); closed = closeResults.Count(result => result.Status == CloseRequestStatus.Closed); stillOpen = closeResults.Count(result => result.Status is CloseRequestStatus.StillOpen or CloseRequestStatus.Failed);
+                var closeResults = await _closer.RequestCloseAsync(closeItems); closed = closeResults.Count(result => result.Status == CloseRequestStatus.Closed); stillOpen = closeResults.Count(result => result.Status is CloseRequestStatus.StillOpen or CloseRequestStatus.Failed or CloseRequestStatus.Unsupported);
                 foreach (var browserGroup in closeTabs.GroupBy(item => item.BrowserFamily ?? "chrome", StringComparer.OrdinalIgnoreCase)) { var browserResults = await BrowserIntegrationService.Current.CloseTabsAsync(browserGroup, browserGroup.Key); closed += browserResults.Count(result => result.Status == "Closed"); stillOpen += browserResults.Count(result => result.Status is "StillOpen" or "Stale" or "ConnectionLost" or "ConnectionError" or "Failed" or "Disabled" or "Unsupported"); }
             }
             await Dialogs.ShowMessage(this, "PARCEL PACKED", $"{selected.Count} ITEM{(selected.Count == 1 ? string.Empty : "S")} SAVED | {deskMessage} | {closed} RESOURCES CLOSED | {stillOpen} STILL OPEN"); Build();

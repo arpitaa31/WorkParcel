@@ -62,6 +62,31 @@ public sealed class DeskMemoryTests
     }
 
     [Fact]
+    public void SameMonitorDpiChangeScalesPhysicalNormalBoundsFromSavedWorkArea()
+    {
+        var source = Monitor("DISPLAY1", true, new DeskRect(0, 0, 1920, 1080), new DeskRect(0, 0, 1920, 1040), 96);
+        var current = Monitor("DISPLAY1", true, new DeskRect(0, 0, 2560, 1440), new DeskRect(0, 0, 2560, 1400), 144);
+        var savedMonitor = new DeskMonitorLayout { Id = Guid.NewGuid(), DeviceIdentifier = source.DeviceIdentifier, IsPrimary = true, Bounds = source.Bounds, WorkArea = source.WorkArea, DpiX = 96, DpiY = 96 };
+        var saved = new DeskWindowLayout { SavedMonitorId = savedMonitor.Id, NormalBounds = new DeskRect(100, 100, 800, 600), AbsoluteBounds = new DeskRect(100, 100, 800, 600), RelativeWidth = .4, RelativeHeight = .5, SourceDpiX = 96, MonitorDpiX = 96, WindowState = DeskWindowState.Normal };
+        var mapping = Assert.Single(DeskMemoryLogic.MapMonitors(new[] { savedMonitor }, new[] { current }));
+        var placement = DeskMemoryLogic.ResolvePlacement(saved, mapping, current.DpiX, true, false);
+        Assert.True(placement.UsedScaledGeometry);
+        Assert.Equal(new DeskRect(150, 150, 1200, 900), placement.NormalBounds);
+    }
+
+    [Fact]
+    public void SavedApplicationWindowsMatchChangedTitlesWithoutMergingHandles()
+    {
+        var saved = new ParcelItem { ItemType = ParcelItemType.ApplicationWindow, DisplayName = "Old document", Value = "C:\\Apps\\editor.exe", ExecutablePath = "C:\\Apps\\editor.exe", ProcessName = "editor", WindowTitle = "Old document", WindowClassName = "EditorWindow" };
+        var first = new ParcelItem { ItemType = ParcelItemType.ApplicationWindow, RuntimeWindowHandle = (nint)41, RuntimeProcessId = 1001, DisplayName = "New document", Value = "C:\\Apps\\editor.exe", ExecutablePath = "C:\\Apps\\editor.exe", ProcessName = "editor", WindowTitle = "New document", WindowClassName = "EditorWindow" };
+        var second = new ParcelItem { ItemType = ParcelItemType.ApplicationWindow, RuntimeWindowHandle = (nint)42, RuntimeProcessId = 1002, DisplayName = "Other", Value = "C:\\Apps\\other.exe", ExecutablePath = "C:\\Apps\\other.exe", ProcessName = "other", WindowTitle = "Other" };
+        var match = Assert.Single(OpenWindowService.MatchSavedItems(new[] { saved }, new[] { first, second }));
+        Assert.Equal(first.RuntimeWindowHandle, match.Live?.Handle);
+        Assert.False(match.IsAmbiguous);
+        Assert.Contains("executable", match.Explanation, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void CaptureIncludesMonitorDpiRelativeGeometryAndPartialFailures()
     {
         var monitor = Monitor("DISPLAY1", true, new DeskRect(0, 0, 1920, 1080), new DeskRect(0, 0, 1920, 1040), 120);
@@ -70,6 +95,7 @@ public sealed class DeskMemoryTests
         var result = DeskMemoryLogic.BuildCapture(Guid.NewGuid(), new[] { item, missing }, new DeskSystemSnapshot(new[] { monitor }, new[] { Window((nint)11, "C:\\Apps\\editor.exe", "editor", "Editor", monitor, 0, 120) }), DateTime.Parse("2026-08-27T10:00:00Z").ToLocalTime());
         var saved = Assert.Single(result.Snapshot.Windows);
         Assert.Equal(120, saved.SourceDpiX);
+        Assert.Equal(120, saved.MonitorDpiX);
         Assert.Equal(result.Snapshot.Monitors.Single().Id, saved.SavedMonitorId);
         Assert.InRange(saved.RelativeWidth, 0, 1);
         Assert.Single(result.Failures);
@@ -140,10 +166,10 @@ public sealed class DeskMemoryTests
         var service = new DeskMemoryService(provider);
         var result = await service.RestoreAsync(capture.Snapshot, new DeskRestoreOptions(EnableUndo: true, TimeoutSeconds: 2));
         Assert.Equal(1, result.RestoredCount);
-        Assert.Single(provider.Applied);
+        Assert.Equal(2, provider.Applied.Count);
         var undo = await service.UndoLastAsync();
         Assert.Equal(1, undo.RestoredCount);
-        Assert.Equal(2, provider.Applied.Count);
+        Assert.Equal(3, provider.Applied.Count);
     }
 
     [Fact]

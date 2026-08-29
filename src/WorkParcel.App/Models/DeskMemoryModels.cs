@@ -112,6 +112,10 @@ public sealed class DeskWindowLayout
     public int ZOrderRank { get; set; }
     public int SourceDpiX { get; set; } = 96;
     public int SourceDpiY { get; set; } = 96;
+    public int MonitorDpiX { get; set; } = 96;
+    public int MonitorDpiY { get; set; } = 96;
+    public bool IsTopmost { get; set; }
+    public bool CoordinatesArePhysicalPixels { get; set; } = true;
     public bool IsEnabled { get; set; } = true;
     public bool IsSupported { get; set; } = true;
     public string? MatchMetadata { get; set; }
@@ -138,7 +142,12 @@ public sealed record DeskLiveWindow(
     int DpiY,
     bool Visible,
     bool ToolWindow,
-    int ZOrderRank);
+    int ZOrderRank)
+{
+    public bool IsTopmost { get; init; }
+    public bool CoordinatesArePhysicalPixels { get; init; } = true;
+    public DateTime? ProcessStartTimeUtc { get; init; }
+}
 
 public sealed record DeskMonitorInfo(
     string DeviceIdentifier,
@@ -174,7 +183,7 @@ public sealed record DeskWindowMatch(
 
 public sealed record DeskMonitorMapping(DeskMonitorLayout Saved, DeskMonitorInfo? Current, bool IsExact, string Explanation);
 
-public sealed record DeskResolvedPlacement(DeskRect NormalBounds, DeskWindowState State, DeskMonitorInfo TargetMonitor, bool UsedScaledGeometry, bool UsedFallbackMonitor);
+public sealed record DeskResolvedPlacement(DeskRect NormalBounds, DeskWindowState State, DeskMonitorInfo TargetMonitor, bool UsedScaledGeometry, bool UsedFallbackMonitor, bool IsTopmost = false);
 
 public sealed record DeskRestorePlanItem(DeskWindowLayout Saved, DeskWindowMatch Match, DeskResolvedPlacement? Placement, DeskRestoreResultKind? PreflightResult);
 

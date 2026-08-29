@@ -135,6 +135,12 @@ public sealed record BrowserTabData
     public bool CanRestore { get; init; }
     public string? UnsupportedReason { get; init; }
     public DateTimeOffset CapturedAtUtc { get; init; }
+    public int? WindowLeft { get; init; }
+    public int? WindowTop { get; init; }
+    public int? WindowWidth { get; init; }
+    public int? WindowHeight { get; init; }
+    public string? WindowState { get; init; }
+    public bool WindowFocused { get; init; }
 }
 
 public sealed record BrowserTabSnapshot

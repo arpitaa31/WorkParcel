@@ -27,6 +27,24 @@ public sealed class BrowserIntegrationTests
     }
 
     [Fact]
+    public void BrowserTabMatchingUsesSavedWindowGeometryAndRefusesUnresolvableDuplicates()
+    {
+        var savedOne = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.BrowserTab, BrowserFamily = "chrome", BrowserWindowGroupId = "saved-a", Value = "https://same.example/", BrowserWindowLeft = 0, BrowserWindowTop = 0, BrowserWindowWidth = 1000, BrowserWindowHeight = 800, BrowserTabIndex = 0 };
+        var savedTwo = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.BrowserTab, BrowserFamily = "chrome", BrowserWindowGroupId = "saved-b", Value = "https://same.example/", BrowserWindowLeft = 100, BrowserWindowTop = 0, BrowserWindowWidth = 1000, BrowserWindowHeight = 800, BrowserTabIndex = 0 };
+        var matched = new HashSet<Guid>(); var groups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var live = new BrowserTabData { Browser = "chrome", WindowGroupKey = "window-0", Url = "https://same.example/", WindowLeft = 100, WindowTop = 0, WindowWidth = 1000, WindowHeight = 800, TabIndex = 0, CanRestore = true };
+        var selected = BrowserIntegrationService.FindSavedTab(new[] { savedOne, savedTwo }, live, matched, groups);
+        Assert.Same(savedTwo, selected);
+        matched.Add(savedTwo.Id);
+        BrowserIntegrationService.ApplyLiveTab(savedTwo, live, updateSavedWindowGroup: true);
+        Assert.Equal("window-0", savedTwo.BrowserWindowGroupId);
+
+        var duplicateOne = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.BrowserTab, BrowserFamily = "chrome", BrowserWindowGroupId = "a", Value = "https://ambiguous.example/" };
+        var duplicateTwo = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.BrowserTab, BrowserFamily = "chrome", BrowserWindowGroupId = "b", Value = "https://ambiguous.example/" };
+        Assert.Null(BrowserIntegrationService.FindSavedTab(new[] { duplicateOne, duplicateTwo }, new BrowserTabData { Browser = "chrome", WindowGroupKey = "new-window", Url = "https://ambiguous.example/", CanRestore = true }, new HashSet<Guid>(), new Dictionary<string, string>()));
+    }
+
+    [Fact]
     public async Task ChromeAndEdgeSessionsRouteSnapshotsIndependently()
     {
         if (!OperatingSystem.IsWindows()) return;

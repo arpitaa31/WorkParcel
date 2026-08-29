@@ -48,7 +48,8 @@ public sealed class RealDeskMemoryManualTests
                 var moved = saved.NormalBounds with { Left = saved.NormalBounds.Left + 80, Top = saved.NormalBounds.Top + 60 };
                 Assert.True(provider.TryApplyPlacement(live.Handle, new DeskResolvedPlacement(DeskMemoryLogic.ClampToWorkArea(moved, monitor.WorkArea), DeskWindowState.Normal, monitor, false, false), out var moveError), moveError);
             }
-            CloseWindows(provider.GetSnapshot().Windows.Where(window => selectedWindows.Any(selected => selected.Handle == window.Handle)).Select(window => window.Handle));
+            var closeResults = await new WindowCloseRequestService().RequestCloseAsync(items);
+            Assert.Equal(2, closeResults.Count(result => result.Status == CloseRequestStatus.Closed));
             await WaitForWindowsAsync(provider, new[] { first.Id, second.Id }, minimum: 0);
             first.Dispose(); second.Dispose();
 

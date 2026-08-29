@@ -147,6 +147,10 @@ public static class DeskMemoryLogic
                 ZOrderRank = live.ZOrderRank,
                 SourceDpiX = Math.Max(1, live.DpiX),
                 SourceDpiY = Math.Max(1, live.DpiY),
+                MonitorDpiX = Math.Max(1, monitor.DpiX),
+                MonitorDpiY = Math.Max(1, monitor.DpiY),
+                IsTopmost = live.IsTopmost,
+                CoordinatesArePhysicalPixels = live.CoordinatesArePhysicalPixels,
                 IsEnabled = true,
                 IsSupported = !string.IsNullOrWhiteSpace(executable) && normal.IsUsable,
                 MatchMetadata = BuildMatchMetadata(item, live),
@@ -266,7 +270,7 @@ public static class DeskMemoryLogic
             DeskRestoreResultKind? preflight = null;
             if (match.Live is null)
             {
-                preflight = match.Confidence == DeskMatchConfidence.Unsupported ? DeskRestoreResultKind.Unsupported : DeskRestoreResultKind.Skipped;
+                preflight = match.Confidence == DeskMatchConfidence.Unsupported ? DeskRestoreResultKind.Unsupported : null;
             }
             else if (match.Confidence is DeskMatchConfidence.Ambiguous or DeskMatchConfidence.Possible)
             {
@@ -282,7 +286,7 @@ public static class DeskMemoryLogic
                 }
                 else
                 {
-                    placement = ResolvePlacement(saved, mapping, match.Live!.DpiX, true, true);
+                    placement = ResolvePlacement(saved, mapping, mapping.Current.DpiX, true, true);
                 }
             }
             items.Add(new(saved, match, placement, preflight));
@@ -300,20 +304,24 @@ public static class DeskMemoryLogic
         int minimumHeight = DefaultMinimumWindowHeight)
     {
         var monitor = mapping.Current ?? throw new InvalidOperationException("No monitor is available for the saved window.");
-        var sourceDpi = Math.Max(1, saved.SourceDpiX);
-        var dpiChanged = Math.Abs(Math.Max(1, targetDpiX) - sourceDpi) > 1;
-        var useScaled = !mapping.IsExact || dpiChanged;
+        var sourceDpi = Math.Max(1, saved.MonitorDpiX > 0 ? saved.MonitorDpiX : saved.SourceDpiX);
+        var targetDpi = Math.Max(1, targetDpiX > 0 ? targetDpiX : monitor.DpiX);
+        var dpiChanged = Math.Abs(targetDpi - sourceDpi) > 1;
+        var workAreaChanged = mapping.Saved.WorkArea != monitor.WorkArea;
+        var useScaled = !mapping.IsExact || dpiChanged || workAreaChanged;
         DeskRect desired;
         if (!useScaled && saved.NormalBounds.IsUsable) desired = saved.NormalBounds;
         else
         {
-            var relative = saved.RelativeWidth > 0 && saved.RelativeHeight > 0
+            var relative = mapping.IsExact && dpiChanged && saved.NormalBounds.IsUsable
+                ? ScaleFromSource(saved.NormalBounds, sourceDpi, targetDpi, mapping.Saved.WorkArea, monitor.WorkArea)
+                : saved.RelativeWidth > 0 && saved.RelativeHeight > 0
                 ? new DeskRect(
                     monitor.WorkArea.Left + Convert.ToInt32(Math.Round(saved.RelativeLeft * monitor.WorkArea.Width)),
                     monitor.WorkArea.Top + Convert.ToInt32(Math.Round(saved.RelativeTop * monitor.WorkArea.Height)),
                     Convert.ToInt32(Math.Round(saved.RelativeWidth * monitor.WorkArea.Width)),
                     Convert.ToInt32(Math.Round(saved.RelativeHeight * monitor.WorkArea.Height)))
-                : ScaleFromSource(saved.NormalBounds, saved.SourceDpiX, targetDpiX, monitor.WorkArea);
+                : ScaleFromSource(saved.NormalBounds, sourceDpi, targetDpi, mapping.Saved.WorkArea, monitor.WorkArea);
             desired = relative;
         }
         var safe = ClampToWorkArea(desired, monitor.WorkArea, minimumWidth, minimumHeight);
@@ -323,7 +331,7 @@ public static class DeskMemoryLogic
             DeskWindowState.Minimized when restoreMinimized => DeskWindowState.Minimized,
             _ => DeskWindowState.Normal
         };
-        return new(safe, state, monitor, useScaled, !mapping.IsExact);
+        return new(safe, state, monitor, useScaled, !mapping.IsExact, saved.IsTopmost);
     }
 
     public static DeskRect ClampToWorkArea(DeskRect desired, DeskRect workArea, int minimumWidth = DefaultMinimumWindowWidth, int minimumHeight = DefaultMinimumWindowHeight)
@@ -413,12 +421,12 @@ public static class DeskMemoryLogic
                string.Equals(Path.GetFileName(savedIdentity), Path.GetFileName(liveIdentity), StringComparison.OrdinalIgnoreCase);
     }
 
-    private static DeskRect ScaleFromSource(DeskRect bounds, int sourceDpi, int targetDpi, DeskRect workArea)
+    private static DeskRect ScaleFromSource(DeskRect bounds, int sourceDpi, int targetDpi, DeskRect sourceWorkArea, DeskRect targetWorkArea)
     {
         var scale = Math.Max(1, targetDpi) / (double)Math.Max(1, sourceDpi);
         return new(
-            workArea.Left + Convert.ToInt32(Math.Round((bounds.Left - workArea.Left) * scale)),
-            workArea.Top + Convert.ToInt32(Math.Round((bounds.Top - workArea.Top) * scale)),
+            targetWorkArea.Left + Convert.ToInt32(Math.Round((bounds.Left - sourceWorkArea.Left) * scale)),
+            targetWorkArea.Top + Convert.ToInt32(Math.Round((bounds.Top - sourceWorkArea.Top) * scale)),
             Convert.ToInt32(Math.Round(bounds.Width * scale)),
             Convert.ToInt32(Math.Round(bounds.Height * scale)));
     }

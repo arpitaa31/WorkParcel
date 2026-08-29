@@ -71,7 +71,9 @@ public sealed class DeskMemoryService
             cancellationToken.ThrowIfCancellationRequested();
             current = _provider.GetSnapshot();
             plan = DeskMemoryLogic.BuildPlan(layout, current, allowedParcelItemIds);
-            if (plan.Items.All(item => item.Match.Live is not null || item.PreflightResult is DeskRestoreResultKind.Unsupported or DeskRestoreResultKind.Ambiguous)) break;
+            if (plan.Items.All(item =>
+                    (item.Match.Live is not null && item.Match.IsAutomatic) ||
+                    item.PreflightResult is DeskRestoreResultKind.Unsupported or DeskRestoreResultKind.Ambiguous)) break;
             if (DateTime.UtcNow >= deadline) break;
             await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
         }
@@ -82,10 +84,11 @@ public sealed class DeskMemoryService
         var plannedItems = plan.Items.ToList();
         if (ambiguityResolver is not null)
         {
+            var reservedHandles = plannedItems.Where(item => item.Match.IsAutomatic && item.Match.Live is not null).Select(item => item.Match.Live!.Handle).ToHashSet();
             foreach (var item in plannedItems.Where(item => item.PreflightResult == DeskRestoreResultKind.Ambiguous).ToList())
             {
                 var candidateWindows = current.Windows
-                    .Where(window => DeskMemoryLogic.ScoreWindow(item.Saved, window) >= 45)
+                    .Where(window => !reservedHandles.Contains(window.Handle) && DeskMemoryLogic.ScoreWindow(item.Saved, window) >= 45)
                     .OrderBy(window => window.ZOrderRank)
                     .ToList();
                 var selectedHandle = await ambiguityResolver(item.Match, candidateWindows, cancellationToken);
@@ -103,15 +106,17 @@ public sealed class DeskMemoryService
                 plannedItems[plannedItems.IndexOf(item)] = item with
                 {
                     Match = match,
-                    Placement = DeskMemoryLogic.ResolvePlacement(item.Saved, mapping, selected.DpiX, options.RestoreMaximized, options.RestoreMinimized),
+                    Placement = DeskMemoryLogic.ResolvePlacement(item.Saved, mapping, mapping.Current.DpiX, options.RestoreMaximized, options.RestoreMinimized),
                     PreflightResult = null
                 };
+                reservedHandles.Add(selected.Handle);
             }
         }
 
         var undo = new List<DeskUndoWindowState>();
         var results = new List<DeskRestoreItemResult>();
         var appliedHandles = new HashSet<nint>();
+        var appliedPlacements = new List<(nint Handle, DeskResolvedPlacement Placement)>();
         foreach (var item in plannedItems)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -155,10 +160,32 @@ public sealed class DeskMemoryService
                 : placement.UsedScaledGeometry ? DeskRestoreResultKind.RestoredScaled
                 : DeskRestoreResultKind.RestoredExactly;
             var stateText = placement.State == DeskWindowState.Maximized ? " and maximized" : placement.State == DeskWindowState.Minimized ? " and minimized" : string.Empty;
-            results.Add(new(item.Saved.Id, item.Saved.ParcelItemId, restoreKind, $"Window restored{stateText}.", live.Handle));
+            results.Add(new(item.Saved.Id, item.Saved.ParcelItemId, restoreKind, string.IsNullOrWhiteSpace(error) ? $"Window restored{stateText}." : $"Window restored{stateText}; Windows adjusted the frame and it will be verified again.", live.Handle));
+            appliedPlacements.Add((live.Handle, placement));
         }
         if (options.EnableUndo && undo.Count > 0)
             _lastUndo = new DeskUndoOperation { Windows = undo, CreatedAtUtc = DateTime.UtcNow };
+
+        // Windows can recalculate a frame, snap zone, or DPI after the first
+        // SetWindowPos call. A bounded verification pass reapplies the same
+        // placement to the same validated HWND without rematching windows.
+        if (appliedHandles.Count > 0)
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
+            foreach (var applied in appliedPlacements)
+            {
+                var resultIndex = results.FindIndex(result => result.RuntimeHandle == applied.Handle);
+                if (!_provider.IsWindow(applied.Handle))
+                {
+                    if (resultIndex >= 0) results[resultIndex] = results[resultIndex] with { Kind = DeskRestoreResultKind.Failed, Message = "The window disappeared during placement verification." };
+                    continue;
+                }
+                if (!_provider.TryApplyPlacement(applied.Handle, applied.Placement, out var verificationError) && resultIndex >= 0)
+                    results[resultIndex] = results[resultIndex] with { Kind = DeskRestoreResultKind.Failed, Message = $"Initial placement succeeded, but verification failed: {verificationError}" };
+                else if (!string.IsNullOrWhiteSpace(verificationError) && resultIndex >= 0)
+                    results[resultIndex] = results[resultIndex] with { Message = $"{results[resultIndex].Message} Windows reported: {verificationError}" };
+            }
+        }
         return new DeskRestoreResult { Items = results, Topology = plan.Topology, Cancelled = false };
     }
 

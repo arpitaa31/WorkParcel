@@ -68,11 +68,11 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         {
             await factory.FileAsync(Guid.Empty, source, 0), factory.Folder(Guid.Empty, folder, 1), factory.Application(Guid.Empty, app, 2),
             factory.WebLink(Guid.Empty, "https://example.com/a?q=1", "Example", null, 3), factory.Note(Guid.Empty, "Remember", "Do the careful thing", 4),
-            new() { ParcelId=Guid.Empty, ItemType=ParcelItemType.ApplicationWindow, DisplayName="Disposable window", Value=app, NormalizedIdentity="window|disposable", ExecutablePath=app, WindowTitle="Disposable window", ProcessName="tiny", CreatedAt=DateTime.Now, UpdatedAt=DateTime.Now, SortOrder=5, CloseSupported=true },
-            new() { ParcelId=Guid.Empty, ItemType=ParcelItemType.BrowserTab, DisplayName="Docs tab", Value="https://example.com/docs", NormalizedIdentity="chrome|window-0|https://example.com/docs", BrowserFamily="chrome", BrowserDomain="example.com", BrowserWindowGroupId="window-0", BrowserTabIndex=0, BrowserCapturedAt=DateTime.Now, CreatedAt=DateTime.Now, UpdatedAt=DateTime.Now, SortOrder=6 }
+            new() { ParcelId=Guid.Empty, ItemType=ParcelItemType.ApplicationWindow, DisplayName="Disposable window", Value=app, NormalizedIdentity="window|disposable", ExecutablePath=app, WindowTitle="Disposable window", WindowClassName="TestWindow", ProcessName="tiny", CreatedAt=DateTime.Now, UpdatedAt=DateTime.Now, SortOrder=5, CloseSupported=true },
+            new() { ParcelId=Guid.Empty, ItemType=ParcelItemType.BrowserTab, DisplayName="Docs tab", Value="https://example.com/docs", NormalizedIdentity="chrome|window-0|https://example.com/docs", BrowserFamily="chrome", BrowserDomain="example.com", BrowserWindowGroupId="window-0", BrowserTabIndex=0, BrowserCapturedAt=DateTime.Now, BrowserWindowLeft=120, BrowserWindowTop=80, BrowserWindowWidth=1400, BrowserWindowHeight=900, BrowserWindowState="normal", BrowserWindowFocused=true, BrowserWindowDpiX=144, BrowserWindowDpiY=144, CreatedAt=DateTime.Now, UpdatedAt=DateTime.Now, SortOrder=6 }
         };
         var parcel = await store.CreateWithItemsAsync("Real setup", "all types", items); Assert.Equal(7, parcel.ItemCount); Assert.Contains("2 APPS", parcel.ItemSummary);
-        var restarted = await Store(temp.Path); var loaded = Assert.Single(restarted.Parcels); Assert.Equal(7, loaded.ItemCount); Assert.Equal(7, loaded.Items.Select(item => item.ItemType).Distinct().Count()); Assert.Equal("Do the careful thing", loaded.Items.Single(item => item.ItemType == ParcelItemType.Note).NoteContent); Assert.Equal("window-0", loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab).BrowserWindowGroupId); Assert.Equal("example.com", loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab).BrowserDomain);
+        var restarted = await Store(temp.Path); var loaded = Assert.Single(restarted.Parcels); Assert.Equal(7, loaded.ItemCount); Assert.Equal(7, loaded.Items.Select(item => item.ItemType).Distinct().Count()); Assert.Equal("Do the careful thing", loaded.Items.Single(item => item.ItemType == ParcelItemType.Note).NoteContent); Assert.Equal("window-0", loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab).BrowserWindowGroupId); Assert.Equal("example.com", loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab).BrowserDomain); var loadedBrowser = loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab); Assert.Equal(120, loadedBrowser.BrowserWindowLeft); Assert.Equal(144, loadedBrowser.BrowserWindowDpiX); Assert.True(loadedBrowser.BrowserWindowFocused); Assert.Equal("TestWindow", loaded.Items.Single(item => item.ItemType == ParcelItemType.ApplicationWindow).WindowClassName);
     }
 
     [Fact]
@@ -226,6 +226,20 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         var savedAfterRestart = new ParcelItem { ItemType=ParcelItemType.ApplicationWindow, CloseSupported=true, RuntimeWindowHandle=nint.Zero };
         var file = new ParcelItem { ItemType=ParcelItemType.File, CloseSupported=true, RuntimeWindowHandle=(nint)123 };
         Assert.True(WindowCloseRequestService.IsCloseCandidate(window)); Assert.False(WindowCloseRequestService.IsCloseCandidate(savedAfterRestart)); Assert.False(WindowCloseRequestService.IsCloseCandidate(file));
+    }
+
+    [Fact]
+    public async Task GracefulClosePlanOnlyPostsToValidatedSelectedWindowHandles()
+    {
+        var safe = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.ApplicationWindow, CloseSupported = true, RuntimeWindowHandle = (nint)1 };
+        var unsafeWindow = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.ApplicationWindow, CloseSupported = true, RuntimeWindowHandle = (nint)2 };
+        var transport = new FakeCloseTransport((nint)1);
+        var service = new WindowCloseRequestService(transport, TimeSpan.FromMilliseconds(1));
+        Assert.Same(safe, Assert.Single(service.BuildPlan(new[] { safe, unsafeWindow })));
+        var results = await service.RequestCloseAsync(new[] { safe, unsafeWindow });
+        Assert.Equal(CloseRequestStatus.Closed, Assert.Single(results, result => result.ItemId == safe.Id).Status);
+        Assert.Equal(CloseRequestStatus.Unsupported, Assert.Single(results, result => result.ItemId == unsafeWindow.Id).Status);
+        Assert.Equal(new[] { (nint)1 }, transport.PostedHandles);
     }
 
     [Fact]
@@ -425,5 +439,14 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
     {
         public override bool CanRead => true; public override bool CanSeek => inner.CanSeek; public override bool CanWrite => false; public override long Length => inner.Length; public override long Position { get => inner.Position; set => inner.Position = value; }
         public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, Math.Min(chunk, count)); public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => inner.ReadAsync(buffer[..Math.Min(chunk, buffer.Length)], cancellationToken); public override void Flush() { } public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask; public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin); public override void SetLength(long value) => throw new NotSupportedException(); public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class FakeCloseTransport(nint safeHandle) : IWindowCloseTransport
+    {
+        private readonly HashSet<nint> _live = new() { (nint)1, (nint)2 };
+        public List<nint> PostedHandles { get; } = new();
+        public bool IsWindow(nint handle) => _live.Contains(handle);
+        public bool IsSafeTarget(ParcelItem item) => item.RuntimeWindowHandle == safeHandle;
+        public bool PostClose(nint handle) { PostedHandles.Add(handle); _live.Remove(handle); return true; }
     }
 }

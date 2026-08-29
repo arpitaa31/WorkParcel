@@ -208,11 +208,97 @@ public sealed class BrowserIntegrationService : IDisposable
             SecondaryDetail = tab.Domain, BrowserDomain = tab.Domain, CreatedAt = now, UpdatedAt = now, LastVerifiedAt = now, SortOrder = sortOrder, LaunchEnabled = tab.CanRestore, BrowserFamily = tab.Browser,
             BrowserWindowGroupId = groupKey, BrowserTabIndex = tab.TabIndex, BrowserPinned = tab.Pinned, BrowserActive = tab.Active, BrowserTabGroupId = BrowserTabRules.StableGroupIdentity(tab.Browser, groupKey, tab.GroupTitle, tab.GroupColor),
             BrowserTabGroupTitle = tab.GroupTitle, BrowserTabGroupColor = tab.GroupColor, BrowserFaviconUrl = BrowserTabRules.SafeFaviconUrl(tab.FaviconUrl), BrowserCapturedAt = tab.CapturedAtUtc.LocalDateTime,
-            BrowserSessionTabId = tab.SessionTabId, BrowserSessionWindowId = tab.SessionWindowId, BrowserConnectionId = connectionId ?? tab.ConnectionId, IsInaccessible = !tab.CanRestore
+            BrowserSessionTabId = tab.SessionTabId, BrowserSessionWindowId = tab.SessionWindowId, BrowserConnectionId = connectionId ?? tab.ConnectionId, CloseSupported = tab.CanRestore, IsInaccessible = !tab.CanRestore,
+            BrowserWindowLeft = tab.WindowLeft, BrowserWindowTop = tab.WindowTop, BrowserWindowWidth = tab.WindowWidth, BrowserWindowHeight = tab.WindowHeight,
+            BrowserWindowState = tab.WindowState, BrowserWindowFocused = tab.WindowFocused
         };
     }
 
-    private static object ToOpenPayload(ParcelItem item, bool allowDuplicates) => new { id = item.Id.ToString(), url = item.Value, browserWindowGroupId = item.BrowserWindowGroupId, tabIndex = item.BrowserTabIndex, pinned = item.BrowserPinned, browserTabGroupId = item.BrowserTabGroupId, browserTabGroupTitle = item.BrowserTabGroupTitle, browserTabGroupColor = item.BrowserTabGroupColor, allowDuplicate = allowDuplicates };
+    /// <summary>
+    /// Associates a live tab with a saved tab without treating a temporary
+    /// browser window id as a permanent identity. The caller supplies the
+    /// already matched item ids and receives a stable-window assignment map so
+    /// identical URLs in two browser windows remain separate when another tab
+    /// in each window provides the disambiguating signal.
+    /// </summary>
+    public static ParcelItem? FindSavedTab(
+        IEnumerable<ParcelItem> savedItems,
+        BrowserTabData liveTab,
+        ISet<Guid> matchedItemIds,
+        IDictionary<string, string>? liveToSavedGroups = null)
+    {
+        var candidates = savedItems
+            .Where(item => item.ItemType == ParcelItemType.BrowserTab && !matchedItemIds.Contains(item.Id))
+            .Where(item => string.Equals(item.BrowserFamily, liveTab.Browser, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var urlCandidates = candidates.Where(item => SameRestorableUrl(item.Value, liveTab.Url)).ToList();
+        if (liveToSavedGroups is not null && liveToSavedGroups.TryGetValue(liveTab.WindowGroupKey, out var assignedGroup))
+            urlCandidates = urlCandidates.Where(item => string.Equals(item.BrowserWindowGroupId, assignedGroup, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (urlCandidates.Count == 0) return null;
+        var ranked = urlCandidates.Select(item => (Item: item, Score: TabMatchScore(item, liveTab)))
+            .OrderByDescending(candidate => candidate.Score).ThenBy(candidate => candidate.Item.SortOrder).ToList();
+        var best = ranked[0];
+        var margin = best.Score - ranked.Skip(1).Select(candidate => candidate.Score).FirstOrDefault();
+        if (ranked.Count > 1 && margin < 8) return null;
+        liveToSavedGroups?[liveTab.WindowGroupKey] = best.Item.BrowserWindowGroupId ?? liveTab.WindowGroupKey;
+        return best.Item;
+    }
+
+    public static void ApplyLiveTab(ParcelItem item, BrowserTabData tab, bool updateSavedWindowGroup = false)
+    {
+        item.UpdatedAt = DateTime.Now;
+        item.LastVerifiedAt = DateTime.Now;
+        item.BrowserCapturedAt = tab.CapturedAtUtc.LocalDateTime;
+        item.BrowserSessionTabId = tab.SessionTabId;
+        item.BrowserSessionWindowId = tab.SessionWindowId;
+        item.BrowserConnectionId = tab.ConnectionId;
+        item.BrowserTabIndex = tab.TabIndex;
+        item.BrowserPinned = tab.Pinned;
+        item.BrowserActive = tab.Active;
+        item.BrowserTabGroupId = BrowserTabRules.StableGroupIdentity(tab.Browser, updateSavedWindowGroup ? tab.WindowGroupKey : item.BrowserWindowGroupId ?? tab.WindowGroupKey, tab.GroupTitle, tab.GroupColor);
+        item.BrowserTabGroupTitle = tab.GroupTitle;
+        item.BrowserTabGroupColor = tab.GroupColor;
+        item.BrowserFaviconUrl = BrowserTabRules.SafeFaviconUrl(tab.FaviconUrl);
+        item.BrowserWindowLeft = tab.WindowLeft;
+        item.BrowserWindowTop = tab.WindowTop;
+        item.BrowserWindowWidth = tab.WindowWidth;
+        item.BrowserWindowHeight = tab.WindowHeight;
+        item.BrowserWindowState = tab.WindowState;
+        item.BrowserWindowFocused = tab.WindowFocused;
+        item.BrowserWindowDpiX = item.BrowserWindowDpiX ?? 96;
+        item.BrowserWindowDpiY = item.BrowserWindowDpiY ?? 96;
+        item.LaunchEnabled = tab.CanRestore;
+        item.IsInaccessible = !tab.CanRestore;
+        item.CloseSupported = tab.CanRestore;
+        if (updateSavedWindowGroup)
+        {
+            item.BrowserWindowGroupId = string.IsNullOrWhiteSpace(tab.WindowGroupKey) ? "window-0" : tab.WindowGroupKey;
+            item.NormalizedIdentity = BrowserTabRules.Identity(tab.Browser, item.BrowserWindowGroupId, item.Value);
+        }
+    }
+
+    private static bool SameRestorableUrl(string left, string right) =>
+        BrowserTabRules.TryGetRestorableUri(left, out var leftUri) &&
+        BrowserTabRules.TryGetRestorableUri(right, out var rightUri) &&
+        string.Equals(leftUri.AbsoluteUri, rightUri.AbsoluteUri, StringComparison.Ordinal);
+
+    private static int TabMatchScore(ParcelItem saved, BrowserTabData live)
+    {
+        var score = 100;
+        if (string.Equals(saved.BrowserWindowGroupId, live.WindowGroupKey, StringComparison.OrdinalIgnoreCase)) score += 18;
+        if (saved.BrowserTabIndex == live.TabIndex) score += 4;
+        if (saved.BrowserPinned == live.Pinned) score += 2;
+        if (saved.BrowserActive == live.Active) score += 1;
+        score += GeometrySignal(saved.BrowserWindowLeft, live.WindowLeft);
+        score += GeometrySignal(saved.BrowserWindowTop, live.WindowTop);
+        score += GeometrySignal(saved.BrowserWindowWidth, live.WindowWidth);
+        score += GeometrySignal(saved.BrowserWindowHeight, live.WindowHeight);
+        return score;
+    }
+
+    private static int GeometrySignal(int? saved, int? live) => saved.HasValue && live.HasValue ? Math.Abs(saved.Value - live.Value) <= 8 ? 10 : 0 : 0;
+
+    private static object ToOpenPayload(ParcelItem item, bool allowDuplicates) => new { id = item.Id.ToString(), url = item.Value, browserWindowGroupId = item.BrowserWindowGroupId, tabIndex = item.BrowserTabIndex, pinned = item.BrowserPinned, active = item.BrowserActive, browserTabGroupId = item.BrowserTabGroupId, browserTabGroupTitle = item.BrowserTabGroupTitle, browserTabGroupColor = item.BrowserTabGroupColor, windowLeft = item.BrowserWindowLeft, windowTop = item.BrowserWindowTop, windowWidth = item.BrowserWindowWidth, windowHeight = item.BrowserWindowHeight, windowState = item.BrowserWindowState, windowFocused = item.BrowserWindowFocused, allowDuplicate = allowDuplicates };
     private BrowserPipeSession? PickSession(string? browser, string? connectionId = null) => _sessions.Values.Where(session => session.Info.Status == BrowserConnectionStatus.Connected && (browser is null || string.Equals(session.Browser, browser, StringComparison.OrdinalIgnoreCase)) && (string.IsNullOrWhiteSpace(connectionId) || string.Equals(session.ConnectionKey, connectionId, StringComparison.Ordinal))).OrderByDescending(session => session.Info.LastConnectedUtc).FirstOrDefault();
 
     private async Task AcceptLoopAsync()
