@@ -154,6 +154,293 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
     }
 
     [Fact]
+    public async Task ItemRemovalUsesStableIdUpdatesAllLiveStatesAndSurvivesRestart()
+    {
+        using var temp = new TestFolder();
+        var path = temp.File("stable-id.txt", "keep the original");
+        var store = await Store(temp.Path);
+        var parcel = await store.CreateEmptyAsync("Stable ID removal");
+        var item = await new ParcelItemFactory().FileAsync(parcel.Id, path, 0);
+        await store.AddItemsAsync(parcel, new[] { item });
+
+        var staleParcel = new Parcel { Id = parcel.Id, Name = parcel.Name, Description = parcel.Description, Status = parcel.Status, CreatedAt = parcel.CreatedAt, UpdatedAt = parcel.UpdatedAt };
+        var staleItem = new ParcelItem { Id = item.Id, ParcelId = parcel.Id, ItemType = item.ItemType, DisplayName = item.DisplayName, Value = item.Value };
+        staleParcel.Items.Add(staleItem);
+        store.SetCurrent(staleParcel);
+
+        var countNotifications = 0;
+        var itemSummaryNotifications = 0;
+        parcel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(Parcel.ItemCount)) countNotifications++;
+            if (args.PropertyName == nameof(Parcel.ItemSummary)) itemSummaryNotifications++;
+        };
+
+        var result = await store.RemoveItemAsync(staleParcel, staleItem);
+
+        Assert.True(result);
+        Assert.Empty(parcel.Items);
+        Assert.Empty(staleParcel.Items);
+        Assert.Equal(0, parcel.ItemCount);
+        Assert.True(countNotifications > 0);
+        Assert.True(itemSummaryNotifications > 0);
+        Assert.True(File.Exists(path));
+        Assert.Single(parcel.History, entry => entry.EventType == ParcelHistoryEventType.ItemRemoved);
+        Assert.Empty(ParcelItemQueries.Apply(parcel.Items, new ParcelItemQuery(null, ParcelItemGroup.Files, ParcelItemSort.Name)));
+
+        await using (var db = new SqliteConnection($"Data Source={temp.Path}\\Data\\workparcel.db"))
+        {
+            await db.OpenAsync();
+            var rowCount = db.CreateCommand(); rowCount.CommandText = "SELECT COUNT(*) FROM ParcelItems WHERE Id=$id;"; rowCount.Parameters.AddWithValue("$id", item.Id.ToString());
+            var historyCount = db.CreateCommand(); historyCount.CommandText = "SELECT COUNT(*) FROM ParcelHistory WHERE ParcelId=$parcel AND EventType='ItemRemoved';"; historyCount.Parameters.AddWithValue("$parcel", parcel.Id.ToString());
+            Assert.Equal(0L, await rowCount.ExecuteScalarAsync());
+            Assert.Equal(1L, await historyCount.ExecuteScalarAsync());
+        }
+
+        var restarted = await Store(temp.Path);
+        var loaded = Assert.Single(restarted.Parcels);
+        Assert.Empty(loaded.Items);
+        Assert.Single(loaded.History, entry => entry.EventType == ParcelHistoryEventType.ItemRemoved);
+    }
+
+    [Fact]
+    public async Task RemovingFolderRecordLeavesExternalFolderAndStaysDeletedAfterRestart()
+    {
+        using var temp = new TestFolder();
+        var folderPath = temp.Folder("keep-folder");
+        var markerPath = temp.File("keep-folder-marker.txt", "original folder remains");
+        File.Move(markerPath, Path.Combine(folderPath, "marker.txt"));
+        var store = await Store(temp.Path);
+        var parcel = await store.CreateEmptyAsync("Folder removal");
+        var item = new ParcelItemFactory().Folder(parcel.Id, folderPath, 0);
+        await store.AddItemsAsync(parcel, new[] { item });
+
+        Assert.True(await store.RemoveItemAsync(parcel, new ParcelItem { Id = item.Id, ParcelId = parcel.Id, ItemType = ParcelItemType.Folder }));
+
+        Assert.True(Directory.Exists(folderPath));
+        Assert.Equal("original folder remains", await File.ReadAllTextAsync(Path.Combine(folderPath, "marker.txt")));
+        await using (var db = new SqliteConnection($"Data Source={temp.Path}\\Data\\workparcel.db"))
+        {
+            await db.OpenAsync();
+            var rowCount = db.CreateCommand(); rowCount.CommandText = "SELECT COUNT(*) FROM ParcelItems WHERE Id=$id;"; rowCount.Parameters.AddWithValue("$id", item.Id.ToString());
+            Assert.Equal(0L, await rowCount.ExecuteScalarAsync());
+        }
+
+        var restarted = await Store(temp.Path);
+        Assert.Empty(Assert.Single(restarted.Parcels).Items);
+    }
+
+    [Fact]
+    public async Task RemovingApplicationRecordLeavesExternalApplicationAndStaysDeletedAfterRestart()
+    {
+        using var temp = new TestFolder();
+        var applicationPath = temp.File("keep-application.exe", "not launched or deleted");
+        var store = await Store(temp.Path);
+        var parcel = await store.CreateEmptyAsync("Application removal");
+        var item = new ParcelItemFactory().Application(parcel.Id, applicationPath, 0);
+        await store.AddItemsAsync(parcel, new[] { item });
+
+        Assert.True(await store.RemoveItemAsync(parcel, new ParcelItem { Id = item.Id, ParcelId = parcel.Id, ItemType = ParcelItemType.Application }));
+
+        Assert.True(File.Exists(applicationPath));
+        Assert.Equal("not launched or deleted", await File.ReadAllTextAsync(applicationPath));
+        await using (var db = new SqliteConnection($"Data Source={temp.Path}\\Data\\workparcel.db"))
+        {
+            await db.OpenAsync();
+            var rowCount = db.CreateCommand(); rowCount.CommandText = "SELECT COUNT(*) FROM ParcelItems WHERE Id=$id;"; rowCount.Parameters.AddWithValue("$id", item.Id.ToString());
+            Assert.Equal(0L, await rowCount.ExecuteScalarAsync());
+        }
+
+        var restarted = await Store(temp.Path);
+        Assert.Empty(Assert.Single(restarted.Parcels).Items);
+    }
+
+    [Fact]
+    public async Task RemovingWebLinkRecordDoesNotOpenOrChangeTheUrlAndStaysDeletedAfterRestart()
+    {
+        using var temp = new TestFolder();
+        var url = "https://example.com/workparcel-disposable-link";
+        var store = await Store(temp.Path);
+        var parcel = await store.CreateEmptyAsync("Web link removal");
+        var item = new ParcelItemFactory().WebLink(parcel.Id, url, "Disposable link", "external reference", 0);
+        await store.AddItemsAsync(parcel, new[] { item });
+
+        Assert.True(await store.RemoveItemAsync(parcel, new ParcelItem { Id = item.Id, ParcelId = parcel.Id, ItemType = ParcelItemType.WebLink }));
+
+        Assert.Equal(0, parcel.ItemCount);
+        await using (var db = new SqliteConnection($"Data Source={temp.Path}\\Data\\workparcel.db"))
+        {
+            await db.OpenAsync();
+            var rowCount = db.CreateCommand(); rowCount.CommandText = "SELECT COUNT(*) FROM ParcelItems WHERE Id=$id OR Value=$url;"; rowCount.Parameters.AddWithValue("$id", item.Id.ToString()); rowCount.Parameters.AddWithValue("$url", url);
+            Assert.Equal(0L, await rowCount.ExecuteScalarAsync());
+        }
+
+        var restarted = await Store(temp.Path);
+        Assert.Empty(Assert.Single(restarted.Parcels).Items);
+    }
+
+    [Fact]
+    public async Task RemovingBrowserTabRecordDoesNotContactBrowserAndStaysDeletedAfterRestart()
+    {
+        using var temp = new TestFolder();
+        var url = "https://example.com/workparcel-disposable-tab";
+        var store = await Store(temp.Path);
+        var parcel = await store.CreateEmptyAsync("Browser tab removal");
+        var item = new ParcelItem
+        {
+            ParcelId = parcel.Id,
+            ItemType = ParcelItemType.BrowserTab,
+            DisplayName = "Disposable browser tab",
+            Value = url,
+            NormalizedIdentity = BrowserTabRules.Identity("chrome", "window-0", url),
+            BrowserFamily = "chrome",
+            BrowserDomain = "example.com",
+            BrowserWindowGroupId = "window-0",
+            BrowserTabIndex = 0,
+            BrowserCapturedAt = DateTime.Now,
+            CreatedAt = DateTime.Now,
+            UpdatedAt = DateTime.Now,
+            LaunchEnabled = true
+        };
+        await store.AddItemsAsync(parcel, new[] { item });
+
+        Assert.True(await store.RemoveItemAsync(parcel, new ParcelItem { Id = item.Id, ParcelId = parcel.Id, ItemType = ParcelItemType.BrowserTab }));
+
+        Assert.Equal(0, parcel.ItemCount);
+        await using (var db = new SqliteConnection($"Data Source={temp.Path}\\Data\\workparcel.db"))
+        {
+            await db.OpenAsync();
+            var rowCount = db.CreateCommand(); rowCount.CommandText = "SELECT COUNT(*) FROM ParcelItems WHERE Id=$id OR Value=$url;"; rowCount.Parameters.AddWithValue("$id", item.Id.ToString()); rowCount.Parameters.AddWithValue("$url", url);
+            Assert.Equal(0L, await rowCount.ExecuteScalarAsync());
+        }
+
+        var restarted = await Store(temp.Path);
+        Assert.Empty(Assert.Single(restarted.Parcels).Items);
+    }
+
+    [Fact]
+    public async Task RepositoryReportsAffectedRowsAndFailedRemovalLeavesStateAndHistoryUnchanged()
+    {
+        using var temp = new TestFolder();
+        var store = await Store(temp.Path);
+        var parcel = await store.CreateEmptyAsync("Affected rows");
+        var item = new ParcelItemFactory().Note(parcel.Id, "Retry me", "saved note", 0);
+        await store.AddItemsAsync(parcel, new[] { item });
+
+        await using (var db = new SqliteConnection($"Data Source={temp.Path}\\Data\\workparcel.db"))
+        {
+            await db.OpenAsync();
+            var delete = db.CreateCommand(); delete.CommandText = "DELETE FROM ParcelItems WHERE Id=$id;"; delete.Parameters.AddWithValue("$id", item.Id.ToString());
+            Assert.Equal(1, await delete.ExecuteNonQueryAsync());
+        }
+
+        var result = await store.RemoveItemAsync(parcel, item);
+
+        Assert.False(result);
+        Assert.Single(parcel.Items);
+        Assert.Equal(1, parcel.ItemCount);
+        Assert.DoesNotContain(parcel.History, entry => entry.EventType == ParcelHistoryEventType.ItemRemoved);
+        var restarted = await Store(temp.Path);
+        Assert.Empty(Assert.Single(restarted.Parcels).Items);
+        Assert.DoesNotContain(restarted.History, entry => entry.EventType == ParcelHistoryEventType.ItemRemoved);
+    }
+
+    [Fact]
+    public async Task RepositoryDeleteReturnsTrueOnlyAfterOneRowIsDeleted()
+    {
+        using var temp = new TestFolder();
+        var paths = new AppDataPaths(temp.Path);
+        var factory = new SqliteConnectionFactory(paths);
+        await new DatabaseInitializer(factory, new AppLogger(paths)).InitializeAsync();
+        var repository = new WorkspaceRepository(factory, paths);
+        var now = DateTime.Now;
+        var parcel = new Parcel { Name = "Repository result", Status = ParcelStatus.Packed, CreatedAt = now, UpdatedAt = now };
+        await repository.InsertParcelWithHistoryAsync(parcel, new ParcelHistoryEntry { ParcelId = parcel.Id, EventType = ParcelHistoryEventType.Created, Summary = "Parcel created", Timestamp = now });
+        var item = new ParcelItem { ParcelId = parcel.Id, ItemType = ParcelItemType.Note, DisplayName = "Record", Value = string.Empty, NoteContent = "saved", CreatedAt = now, UpdatedAt = now, SortOrder = 0, LaunchEnabled = false };
+        await repository.InsertItemsWithHistoryAsync(new[] { item }, new ParcelHistoryEntry { ParcelId = parcel.Id, EventType = ParcelHistoryEventType.ItemAdded, Summary = "Note added", Timestamp = now.AddTicks(1) });
+
+        Assert.True(await repository.DeleteItemWithHistoryAsync(item.Id, new ParcelHistoryEntry { ParcelId = parcel.Id, EventType = ParcelHistoryEventType.ItemRemoved, Summary = "Note removed", Timestamp = now.AddTicks(2) }));
+        Assert.False(await repository.DeleteItemWithHistoryAsync(item.Id, new ParcelHistoryEntry { ParcelId = parcel.Id, EventType = ParcelHistoryEventType.ItemRemoved, Summary = "Should not be recorded", Timestamp = now.AddTicks(3) }));
+
+        var snapshot = await repository.LoadSnapshotAsync();
+        Assert.Empty(snapshot.Items);
+        Assert.Single(snapshot.History, entry => entry.EventType == ParcelHistoryEventType.ItemRemoved);
+    }
+
+    [Fact]
+    public async Task BulkRemovalRollsBackWhenAnyStableIdWasNotDeleted()
+    {
+        using var temp = new TestFolder();
+        var store = await Store(temp.Path);
+        var parcel = await store.CreateEmptyAsync("Atomic bulk removal");
+        var first = new ParcelItemFactory().Note(parcel.Id, "First", "first", 0);
+        var second = new ParcelItemFactory().Note(parcel.Id, "Second", "second", 1);
+        await store.AddItemsAsync(parcel, new[] { first, second });
+
+        var deleted = await store.RemoveItemsAsync(parcel, new[] { first, new ParcelItem { Id = Guid.NewGuid(), ParcelId = parcel.Id, ItemType = ParcelItemType.Note } });
+
+        Assert.Equal(0, deleted);
+        Assert.Equal(2, parcel.ItemCount);
+        Assert.Contains(parcel.Items, item => item.Id == first.Id);
+        Assert.Contains(parcel.Items, item => item.Id == second.Id);
+        Assert.DoesNotContain(parcel.History, entry => entry.EventType == ParcelHistoryEventType.ItemRemoved);
+        var restarted = await Store(temp.Path);
+        Assert.Equal(2, Assert.Single(restarted.Parcels).ItemCount);
+    }
+
+    [Fact]
+    public async Task RemovingLastItemUpdatesFilteredAndGroupedStateImmediately()
+    {
+        using var temp = new TestFolder();
+        var store = await Store(temp.Path);
+        var parcel = await store.CreateEmptyAsync("Views");
+        var first = new ParcelItemFactory().Note(parcel.Id, "Same title", "first", 0);
+        var second = new ParcelItemFactory().Note(parcel.Id, "Same title", "second", 1);
+        await store.AddItemsAsync(parcel, new[] { first, second });
+
+        var removed = await store.RemoveItemAsync(parcel, new ParcelItem { Id = first.Id, ParcelId = parcel.Id, ItemType = first.ItemType, DisplayName = first.DisplayName });
+
+        Assert.True(removed);
+        Assert.Single(parcel.Items);
+        Assert.Equal(second.Id, parcel.Items[0].Id);
+        Assert.Equal(1, parcel.ItemCount);
+        Assert.Single(ParcelItemQueries.Apply(parcel.Items, new ParcelItemQuery("Same title", ParcelItemGroup.Notes, ParcelItemSort.Name)));
+        Assert.Single(parcel.Items.GroupBy(item => item.ItemType));
+
+        Assert.True(await store.RemoveItemAsync(parcel, new ParcelItem { Id = second.Id, ParcelId = parcel.Id, ItemType = second.ItemType }));
+        Assert.Empty(parcel.Items);
+        Assert.Equal(0, parcel.ItemCount);
+        Assert.Empty(ParcelItemQueries.Apply(parcel.Items, new ParcelItemQuery("Same title", ParcelItemGroup.Notes, ParcelItemSort.Name)));
+        Assert.Empty(parcel.Items.GroupBy(item => item.ItemType));
+    }
+
+    [Fact]
+    public async Task ConcurrentRemovalAttemptsCreateOneOperationAndOneActivityEntry()
+    {
+        using var temp = new TestFolder();
+        var store = await Store(temp.Path);
+        var parcel = await store.CreateEmptyAsync("One operation");
+        var item = new ParcelItemFactory().Note(parcel.Id, "Only once", "saved note", 0);
+        await store.AddItemsAsync(parcel, new[] { item });
+
+        var attempts = await Task.WhenAll(
+            store.RemoveItemAsync(parcel, new ParcelItem { Id = item.Id, ParcelId = parcel.Id, ItemType = item.ItemType }),
+            store.RemoveItemAsync(parcel, new ParcelItem { Id = item.Id, ParcelId = parcel.Id, ItemType = item.ItemType }));
+
+        Assert.Equal(1, attempts.Count(result => result));
+        Assert.Equal(1, attempts.Count(result => !result));
+        Assert.Empty(parcel.Items);
+        Assert.Single(parcel.History, entry => entry.EventType == ParcelHistoryEventType.ItemRemoved);
+
+        await using var db = new SqliteConnection($"Data Source={temp.Path}\\Data\\workparcel.db");
+        await db.OpenAsync();
+        var historyCount = db.CreateCommand();
+        historyCount.CommandText = "SELECT COUNT(*) FROM ParcelHistory WHERE ParcelId=$parcel AND EventType='ItemRemoved';";
+        historyCount.Parameters.AddWithValue("$parcel", parcel.Id.ToString());
+        Assert.Equal(1L, await historyCount.ExecuteScalarAsync());
+    }
+
+    [Fact]
     public void WindowFilteringExcludesOwnProcessToolWindowsAndSystemNoise()
     {
         Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(1, 42, "WorkParcel", "WorkParcel.App", null, "WorkParcel", true, false), 42));
@@ -217,6 +504,28 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         using var temp = new TestFolder(); var store = await Store(temp.Path); var factory = new ParcelItemFactory(); var firstPath = temp.File("first.txt", "1"); var secondPath = temp.File("second.txt", "2"); var parcel = await store.CreateWithItemsAsync("Pack", "", new[] { await factory.FileAsync(Guid.Empty, firstPath, 0), await factory.FileAsync(Guid.Empty, secondPath, 1) });
         var keep = parcel.Items[1]; var link = factory.WebLink(parcel.Id, "https://example.com/new", null, null, 2); await store.ReplaceItemsAsync(parcel, new[] { keep, link }, "Parcel packed — 2 items saved");
         var restarted = await Store(temp.Path); var loaded = Assert.Single(restarted.Parcels); Assert.Equal(2, loaded.ItemCount); Assert.DoesNotContain(loaded.Items, item => item.Value == firstPath); Assert.Contains(loaded.Items, item => item.ItemType == ParcelItemType.WebLink);
+    }
+
+    [Fact]
+    public async Task ReplacingPackSelectionUpdatesEveryLiveParcelStateAfterCommit()
+    {
+        using var temp = new TestFolder();
+        var store = await Store(temp.Path);
+        var factory = new ParcelItemFactory();
+        var firstPath = temp.File("first-live.txt", "1");
+        var secondPath = temp.File("second-live.txt", "2");
+        var parcel = await store.CreateWithItemsAsync("Shared pack state", "", new[] { await factory.FileAsync(Guid.Empty, firstPath, 0), await factory.FileAsync(Guid.Empty, secondPath, 1) });
+        var stale = new Parcel { Id = parcel.Id, Name = parcel.Name, Description = parcel.Description, Status = ParcelStatus.Open, CreatedAt = parcel.CreatedAt, UpdatedAt = parcel.UpdatedAt };
+        foreach (var item in parcel.Items) stale.Items.Add(new ParcelItem { Id = item.Id, ParcelId = parcel.Id, ItemType = item.ItemType, DisplayName = item.DisplayName, Value = item.Value, NormalizedIdentity = item.NormalizedIdentity, CreatedAt = item.CreatedAt, UpdatedAt = item.UpdatedAt, SortOrder = item.SortOrder });
+        store.SetCurrent(stale);
+
+        await store.ReplaceItemsAsync(parcel, new[] { parcel.Items[1] }, "Pack one selected item");
+
+        Assert.Equal(ParcelStatus.Packed, parcel.Status);
+        Assert.Equal(new[] { parcel.Items.Single().Id }, stale.Items.Select(item => item.Id));
+        Assert.Null(store.CurrentParcel);
+        var restarted = await Store(temp.Path);
+        Assert.Equal(new[] { parcel.Items.Single().Id }, Assert.Single(restarted.Parcels).Items.Select(item => item.Id));
     }
 
     [Fact]

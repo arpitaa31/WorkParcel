@@ -4,7 +4,10 @@ public sealed class AppDataPaths
 {
     public AppDataPaths(string? root = null)
     {
-        RootDirectory = root ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WorkParcel");
+        var configuredRoot = root ?? Environment.GetEnvironmentVariable("WORKPARCEL_DATA_ROOT");
+        RootDirectory = string.IsNullOrWhiteSpace(configuredRoot)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WorkParcel")
+            : configuredRoot.Trim();
         DataDirectory = Path.Combine(RootDirectory, "Data");
         DatabasePath = Path.Combine(DataDirectory, "workparcel.db");
         LogDirectory = Path.Combine(RootDirectory, "Logs");

@@ -18,13 +18,13 @@ Confirm that `%LOCALAPPDATA%\Programs\WorkParcel\WorkParcel.exe` exists. Repair 
 
 WorkParcel stores the database at `%LOCALAPPDATA%\WorkParcel\Data\workparcel.db` and logs at `%LOCALAPPDATA%\WorkParcel\Logs\workparcel.log`. The install directory is not the data directory. Reinstall and ordinary uninstall do not delete this data. Do not copy a developer database into the installation folder.
 
-## The browser bridge says “NATIVE HOST NOT INSTALLED” or “EXTENSION NOT DETECTED”
+## Browser tabs are not connected
 
-The extension is optional and is not installed automatically. Load the installed `browser-extension` folder as an unpacked extension, copy its exact ID, and rerun the current-user registration command in [BROWSER-EXTENSION-SETUP.md](BROWSER-EXTENSION-SETUP.md). Use the exact Chrome or Edge ID; do not use `*`. Reload the extension and restart the browser if necessary.
+Open **Settings -> BROWSER TABS** and choose **CONNECT CHROME** or **CONNECT EDGE**. The guided flow detects the browser and shows the next required step. If manual extension loading is required, enable Developer mode, choose **Load unpacked**, select the installed `browser-extension` folder, and return to WorkParcel. The exact extension ID may be required by browser security; never use `*`. Reload the extension and restart the browser if necessary.
 
-## The browser bridge says “APP NOT RUNNING” or “CONNECTION ERROR”
+## The browser card says "Connection needs attention"
 
-Start WorkParcel normally, confirm that the native host path is the installed `BrowserHost\WorkParcel.BrowserHost.exe`, and use **REPAIR CONNECTION** in Settings to view the command. The bridge uses a current-user named pipe and does not require a public localhost server. WorkParcel can continue to manage non-browser parcel items if the bridge is unavailable.
+Choose **FIX CONNECTION**. If the problem remains, expand **ADVANCED DETAILS** and use **View details**, **Repair connection**, or **View setup help**. The bridge uses a current-user named pipe and does not require a public localhost server. WorkParcel can continue to manage non-browser parcel items if the bridge is unavailable.
 
 ## Uninstall and data preservation
 

@@ -14,6 +14,12 @@ public sealed partial class ArchivePage : PageBase
         var body = Body(14); body.Children.Add(Header("ARCHIVE", "Saved records kept out of the working list.")); body.Children.Add(_search); body.Children.Add(Ui.Rule()); body.Children.Add(_rows); _search.TextChanged += (_, _) => Refresh(); SetContent(body); Refresh();
     }
 
+    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        Refresh();
+    }
+
     private void Refresh()
     {
         _rows.Children.Clear();

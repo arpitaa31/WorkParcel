@@ -19,19 +19,17 @@ public sealed partial class ParcelDetailsPage : PageBase
     private readonly WindowCloseRequestService _closer = new();
     private readonly WorkspacePickerService _pickers = new();
     private readonly ParcelItemFactory _factory = new();
-    private readonly StackPanel _itemsHost = Ui.Stack(2);
-    private readonly TextBox _search = new() { PlaceholderText = "Search parcel items", MinWidth = 220 };
-    private readonly ComboBox _filter = new() { MinWidth = 145, ItemsSource = new[] { "ALL", "APPS & WINDOWS", "LINKS", "FILES", "FOLDERS", "NOTES", "BROWSER TABS", "CHROME TABS", "EDGE TABS" }, SelectedIndex = 0 };
-    private readonly ComboBox _sort = new() { MinWidth = 130, ItemsSource = new[] { "DATE ADDED", "NAME", "TYPE", "SAVED POSITION" }, SelectedIndex = 0 };
+    private StackPanel _itemsHost = null!;
+    private TextBox _search = null!;
+    private ComboBox _filter = null!;
+    private ComboBox _sort = null!;
     private Parcel? _parcel;
     private readonly HashSet<Guid> _selectedItemIds = new();
     private bool _busy;
+    private bool _removalInProgress;
     private int _searchVersion;
 
-    public ParcelDetailsPage()
-    {
-        _search.TextChanged += (_, _) => QueueSearchRefresh(); _filter.SelectionChanged += (_, _) => RefreshRows(); _sort.SelectionChanged += (_, _) => RefreshRows();
-    }
+    public ParcelDetailsPage() { }
 
     protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
     {
@@ -48,9 +46,27 @@ public sealed partial class ParcelDetailsPage : PageBase
 
     private void Build()
     {
+        // The page is refreshed after availability checks and data mutations. Never
+        // reparent controls from the old visual tree; WinUI keeps the old tree alive
+        // briefly while an async refresh is completing.
+        if (Content is not null) Content = null;
+        _itemsHost = Ui.Stack(2);
+        _search = new TextBox { PlaceholderText = "Search parcel items", MinWidth = 220 };
+        _filter = new ComboBox { MinWidth = 145, ItemsSource = new[] { "ALL", "APPS & WINDOWS", "LINKS", "FILES", "FOLDERS", "NOTES", "BROWSER TABS", "CHROME TABS", "EDGE TABS" }, SelectedIndex = 0 };
+        _sort = new ComboBox { MinWidth = 130, ItemsSource = new[] { "DATE ADDED", "NAME", "TYPE", "SAVED POSITION" }, SelectedIndex = 0 };
+        _search.TextChanged += (_, _) => QueueSearchRefresh();
+        _filter.SelectionChanged += (_, _) => RefreshRows();
+        _sort.SelectionChanged += (_, _) => RefreshRows();
         Ui.Interactive(_search, 1.004f); Ui.Interactive(_filter, 1.01f); Ui.Interactive(_sort, 1.01f);
         if (_parcel is null) { SetContent(Ui.Card(Ui.Text("Parcel not found.", 14), 20)); return; }
-        var body = Body(15); body.Children.Add(BuildHeader()); body.Children.Add(Ui.Rule()); body.Children.Add(BuildTools()); body.Children.Add(BuildDeskMemorySection()); body.Children.Add(DropTarget()); body.Children.Add(_itemsHost); RefreshRows();
+        var body = Body(15);
+        body.Children.Add(BuildHeader());
+        body.Children.Add(Ui.Rule());
+        body.Children.Add(BuildTools());
+        body.Children.Add(BuildDeskMemorySection());
+        body.Children.Add(DropTarget());
+        body.Children.Add(_itemsHost);
+        RefreshRows();
         body.Children.Add(Ui.SectionHeader("PARCEL HISTORY", "Meaningful saved changes only.")); if (_parcel.History.Count == 0) body.Children.Add(Ui.Text("No history yet.", 12, false, "#8D9CA2")); foreach (var entry in _parcel.History.OrderByDescending(entry => entry.Timestamp).Take(50)) body.Children.Add(HistoryRow(entry)); SetContent(body);
     }
 
@@ -102,7 +118,10 @@ public sealed partial class ParcelDetailsPage : PageBase
 
     private Grid BuildTools()
     {
-        var grid = new Grid { ColumnSpacing = 9, RowSpacing = 9 }; grid.Children.Add(_search); grid.Children.Add(_filter); grid.Children.Add(_sort);
+        var grid = new Grid { ColumnSpacing = 9, RowSpacing = 9 };
+        grid.Children.Add(_search);
+        grid.Children.Add(_filter);
+        grid.Children.Add(_sort);
         var refresh = Ui.Button(">> AVAILABILITY"); refresh.Click += async (_, _) => await RefreshAvailabilityAsync(true); grid.Children.Add(refresh);
         var add = Ui.Button("+ ADD ITEM"); add.Click += (_, _) => Frame?.Navigate(typeof(CapturePage), new CaptureSeed(_parcel!.Name, _parcel.Description, _parcel.Id)); grid.Children.Add(add);
         var capture = Ui.Button("CAPTURE OPEN TABS"); capture.Click += (_, _) => Frame?.Navigate(typeof(CapturePage), new CaptureSeed(_parcel!.Name, _parcel.Description, _parcel.Id)); grid.Children.Add(capture);
@@ -167,7 +186,7 @@ public sealed partial class ParcelDetailsPage : PageBase
 
     private async Task RefreshAvailabilityAsync(bool showResult)
     {
-        if (_parcel is null || _busy) return; _busy = true;
+        if (_parcel is null || _busy || _removalInProgress) return; _busy = true;
         try { await Store.VerifyItemsAsync(_parcel); Build(); if (showResult) await Dialogs.ShowMessage(this, "AVAILABILITY CHECKED", $"{_parcel.AvailableItemCount} AVAILABLE | {_parcel.MissingItemCount} MISSING"); }
         catch (Exception exception) { AppLogger.LogTechnicalError(exception); if (showResult) await Dialogs.ShowMessage(this, "CHECK INCOMPLETE", "Some items could not be verified. Their saved records were kept."); }
         finally { _busy = false; }
@@ -435,11 +454,11 @@ public sealed partial class ParcelDetailsPage : PageBase
         catch (Exception exception) { AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "LAYOUT WAS NOT REMOVED", "The saved Desk Memory records are still present."); }
     }
 
-    private static DeskLayoutSnapshot CloneDeskLayout(DeskLayoutSnapshot source)
+    private static DeskLayoutSnapshot CloneDeskLayout(DeskLayoutSnapshot source, ISet<Guid>? allowedWindowItemIds = null)
     {
         var clone = new DeskLayoutSnapshot { Id = source.Id, ParcelId = source.ParcelId, Name = source.Name, CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, IsCurrent = source.IsCurrent, IsEnabled = source.IsEnabled, TopologySignature = source.TopologySignature };
         foreach (var monitor in source.Monitors) clone.Monitors.Add(new DeskMonitorLayout { Id = monitor.Id, LayoutSnapshotId = monitor.LayoutSnapshotId, ParcelId = monitor.ParcelId, DeviceIdentifier = monitor.DeviceIdentifier, FriendlyName = monitor.FriendlyName, IsPrimary = monitor.IsPrimary, Bounds = monitor.Bounds, WorkArea = monitor.WorkArea, RelativeArrangement = monitor.RelativeArrangement, DpiX = monitor.DpiX, DpiY = monitor.DpiY, Orientation = monitor.Orientation, CaptureOrder = monitor.CaptureOrder, CreatedAt = monitor.CreatedAt });
-        foreach (var window in source.Windows) clone.Windows.Add(new DeskWindowLayout { Id = window.Id, LayoutSnapshotId = window.LayoutSnapshotId, ParcelId = window.ParcelId, ParcelItemId = window.ParcelItemId, ExecutableIdentity = window.ExecutableIdentity, ApplicationIdentifier = window.ApplicationIdentifier, ProcessName = window.ProcessName, CapturedTitle = window.CapturedTitle, NormalizedTitle = window.NormalizedTitle, WindowClassName = window.WindowClassName, SavedMonitorId = window.SavedMonitorId, AbsoluteBounds = window.AbsoluteBounds, NormalBounds = window.NormalBounds, RelativeLeft = window.RelativeLeft, RelativeTop = window.RelativeTop, RelativeWidth = window.RelativeWidth, RelativeHeight = window.RelativeHeight, WindowState = window.WindowState, ZOrderRank = window.ZOrderRank, SourceDpiX = window.SourceDpiX, SourceDpiY = window.SourceDpiY, MonitorDpiX = window.MonitorDpiX, MonitorDpiY = window.MonitorDpiY, IsTopmost = window.IsTopmost, CoordinatesArePhysicalPixels = window.CoordinatesArePhysicalPixels, IsEnabled = window.IsEnabled, IsSupported = window.IsSupported, MatchMetadata = window.MatchMetadata, LastMatchConfidence = window.LastMatchConfidence, CreatedAt = window.CreatedAt, UpdatedAt = window.UpdatedAt });
+        foreach (var window in source.Windows.Where(window => allowedWindowItemIds is null || window.ParcelItemId is Guid itemId && allowedWindowItemIds.Contains(itemId))) clone.Windows.Add(new DeskWindowLayout { Id = window.Id, LayoutSnapshotId = window.LayoutSnapshotId, ParcelId = window.ParcelId, ParcelItemId = window.ParcelItemId, ExecutableIdentity = window.ExecutableIdentity, ApplicationIdentifier = window.ApplicationIdentifier, ProcessName = window.ProcessName, CapturedTitle = window.CapturedTitle, NormalizedTitle = window.NormalizedTitle, WindowClassName = window.WindowClassName, SavedMonitorId = window.SavedMonitorId, AbsoluteBounds = window.AbsoluteBounds, NormalBounds = window.NormalBounds, RelativeLeft = window.RelativeLeft, RelativeTop = window.RelativeTop, RelativeWidth = window.RelativeWidth, RelativeHeight = window.RelativeHeight, WindowState = window.WindowState, ZOrderRank = window.ZOrderRank, SourceDpiX = window.SourceDpiX, SourceDpiY = window.SourceDpiY, MonitorDpiX = window.MonitorDpiX, MonitorDpiY = window.MonitorDpiY, IsTopmost = window.IsTopmost, CoordinatesArePhysicalPixels = window.CoordinatesArePhysicalPixels, IsEnabled = window.IsEnabled, IsSupported = window.IsSupported, MatchMetadata = window.MatchMetadata, LastMatchConfidence = window.LastMatchConfidence, CreatedAt = window.CreatedAt, UpdatedAt = window.UpdatedAt });
         return clone;
     }
 
@@ -479,6 +498,7 @@ public sealed partial class ParcelDetailsPage : PageBase
         {
             var current = await _windows.DetectAsync(parcel.Id); var candidates = parcel.Items.ToList();
             foreach (var savedItem in candidates.Where(item => item.ItemType == ParcelItemType.ApplicationWindow)) { savedItem.RuntimeWindowHandle = nint.Zero; savedItem.RuntimeProcessId = 0; }
+            foreach (var savedItem in candidates.Where(item => item.ItemType == ParcelItemType.BrowserTab)) { savedItem.BrowserSessionTabId = null; savedItem.BrowserSessionWindowId = null; savedItem.BrowserConnectionId = null; savedItem.CloseSupported = false; }
             var matchedWindows = OpenWindowService.MatchSavedItems(candidates, current);
             var matchedHandles = new HashSet<nint>();
             foreach (var match in matchedWindows.Where(match => match.Live is not null))
@@ -495,7 +515,7 @@ public sealed partial class ParcelDetailsPage : PageBase
                 var candidate = BrowserIntegrationService.FromTab(parcel.Id, tab, candidates.Count, null);
                 var saved = BrowserIntegrationService.FindSavedTab(candidates, tab, matchedBrowserIds, liveToSavedGroups);
                 if (saved is not null) { BrowserIntegrationService.ApplyLiveTab(saved, tab, updateSavedWindowGroup: true); matchedBrowserIds.Add(saved.Id); }
-                else { candidate.CloseSupported = tab.CanRestore; candidates.Add(candidate); }
+                else { candidate.CloseSupported = tab.CanRestore; candidates.Add(candidate); matchedBrowserIds.Add(candidate.Id); }
             }
             var checks = new Dictionary<ParcelItem, CheckBox>(); var stack = Ui.Stack(5); stack.Children.Add(Ui.Text("Choose what remains saved. Saving does not close anything unless you choose the close option.", 12, false, "#8D9CA2"));
             var updateDeskMemory = new CheckBox { Content = "UPDATE DESK MEMORY", IsChecked = parcel.DeskLayout?.IsEnabled == true || candidates.Any(item => item.ItemType == ParcelItemType.ApplicationWindow && item.RuntimeWindowHandle != nint.Zero), IsEnabled = candidates.Any(item => item.ItemType == ParcelItemType.ApplicationWindow && item.RuntimeWindowHandle != nint.Zero) }; stack.Children.Add(updateDeskMemory);
@@ -505,7 +525,7 @@ public sealed partial class ParcelDetailsPage : PageBase
                 var saved = parcel.Items.Any(existing => existing.Id == item.Id); var closeReady = item.ItemType == ParcelItemType.BrowserTab ? item.CloseSupported && !string.IsNullOrWhiteSpace(item.BrowserSessionTabId) && !string.IsNullOrWhiteSpace(item.BrowserSessionWindowId) : WindowCloseRequestService.IsSafeCloseTarget(item); var source = saved ? "SAVED" : "NEW DETECTED"; var closeState = closeReady ? "CLOSE READY" : "CANNOT CLOSE";
                 var box = new CheckBox { Content = $"{source}   {item.DisplayName}   [{item.TypeLabel}]   {item.AvailabilityLabel}   [{closeState}]", IsChecked = saved }; checks[item] = box; stack.Children.Add(box);
             }
-            void UpdateSummary() { var selectedNow = checks.Where(pair => pair.Value.IsChecked == true).Select(pair => pair.Key).ToList(); var additions = selectedNow.Count(item => parcel.Items.All(saved => saved.Id != item.Id)); var removalsNow = parcel.Items.Count(item => !selectedNow.Contains(item)); var missing = selectedNow.Count(item => item.IsMissing || item.IsInaccessible); summary.Text = $"{selectedNow.Count} SAVED  |  {additions} NEW  |  {removalsNow} REMOVED  |  {missing} UNAVAILABLE"; }
+            void UpdateSummary() { var selectedNow = checks.Where(pair => pair.Value.IsChecked == true).Select(pair => pair.Key).ToList(); var selectedNowIds = selectedNow.Select(item => item.Id).ToHashSet(); var additions = selectedNow.Count(item => parcel.Items.All(saved => saved.Id != item.Id)); var removalsNow = parcel.Items.Count(item => !selectedNowIds.Contains(item.Id)); var missing = selectedNow.Count(item => item.IsMissing || item.IsInaccessible); summary.Text = $"{selectedNow.Count} SAVED  |  {additions} NEW  |  {removalsNow} REMOVED  |  {missing} UNAVAILABLE"; }
             foreach (var box in checks.Values) { box.Checked += (_, _) => UpdateSummary(); box.Unchecked += (_, _) => UpdateSummary(); } UpdateSummary();
             var closeableAppCount = candidates.Count(item => item.ItemType == ParcelItemType.ApplicationWindow && WindowCloseRequestService.IsSafeCloseTarget(item));
             var closeableTabCount = candidates.Count(item => item.ItemType == ParcelItemType.BrowserTab && item.CloseSupported && !string.IsNullOrWhiteSpace(item.BrowserSessionTabId) && !string.IsNullOrWhiteSpace(item.BrowserSessionWindowId));
@@ -513,11 +533,11 @@ public sealed partial class ParcelDetailsPage : PageBase
             var secondaryText = BrowserIntegrationService.Current.TabClosingEnabled ? "SAVE AND CLOSE SELECTED" : closeableAppCount > 0 ? "SAVE AND CLOSE APPLICATION WINDOWS" : "BROWSER TAB CLOSING UNAVAILABLE";
             var dialog = new ContentDialog { Title = "PACK AWAY", Content = new ScrollViewer { Content = stack, MaxHeight = 520 }, PrimaryButtonText = "SAVE SELECTION", SecondaryButtonText = secondaryText, CloseButtonText = "CANCEL", DefaultButton = ContentDialogButton.Primary, XamlRoot = XamlRoot, IsSecondaryButtonEnabled = closeButtonEnabled };
             var choice = await Ui.ShowDialog(dialog); if (choice == ContentDialogResult.None) return;
-            var selected = checks.Where(pair => pair.Value.IsChecked == true).Select(pair => pair.Key).ToList(); var removals = parcel.Items.Count(item => !selected.Contains(item));
+            var selected = checks.Where(pair => pair.Value.IsChecked == true).Select(pair => pair.Key).ToList(); var selectedIds = selected.Select(item => item.Id).ToHashSet(); var removals = parcel.Items.Count(item => !selectedIds.Contains(item.Id));
             if (removals > 0 && !await Dialogs.Confirm(this, "REMOVE SAVED ITEM RECORDS?", $"{removals} WorkParcel record{(removals == 1 ? string.Empty : "s")} will be removed. External resources stay untouched.", "REMOVE AND SAVE")) return;
             var closeItems = _closer.BuildPlan(selected); var closeTabs = selected.Where(item => item.ItemType == ParcelItemType.BrowserTab && item.CloseSupported && !string.IsNullOrWhiteSpace(item.BrowserSessionTabId) && !string.IsNullOrWhiteSpace(item.BrowserSessionWindowId)).ToList();
 
-            DeskLayoutSnapshot? deskLayout = null; var deskMessage = "DESK MEMORY NOT UPDATED";
+            DeskLayoutSnapshot? deskLayout = null; var clearDeskLayout = false; var deskMessage = "DESK MEMORY NOT UPDATED";
             if (updateDeskMemory.IsChecked == true && selected.Any(item => item.ItemType == ParcelItemType.ApplicationWindow))
             {
                 try
@@ -532,7 +552,14 @@ public sealed partial class ParcelDetailsPage : PageBase
                     if (!await Dialogs.Confirm(this, "DESK MEMORY UPDATE FAILED", "The window layout could not be captured. Continue saving the parcel without changing its Desk Memory?", "CONTINUE WITHOUT UPDATE")) return;
                 }
             }
-            await Store.ReplaceItemsAsync(parcel, selected, choice == ContentDialogResult.Secondary ? $"Parcel packed - {selected.Count} items saved; graceful close requested; {deskMessage.ToLowerInvariant()}" : $"Parcel packed - {selected.Count} items saved; {deskMessage.ToLowerInvariant()}", deskLayout: deskLayout);
+            if (deskLayout is null && parcel.DeskLayout is not null)
+            {
+                var selectedWindowIds = selected.Where(item => item.ItemType == ParcelItemType.ApplicationWindow).Select(item => item.Id).ToHashSet();
+                deskLayout = CloneDeskLayout(parcel.DeskLayout, selectedWindowIds);
+                if (deskLayout.Windows.Count == 0) { deskLayout = null; clearDeskLayout = true; deskMessage = "DESK MEMORY REMOVED"; }
+                else deskMessage = "DESK MEMORY KEPT FOR SAVED WINDOWS";
+            }
+            await Store.ReplaceItemsAsync(parcel, selected, choice == ContentDialogResult.Secondary ? $"Parcel packed - {selected.Count} items saved; graceful close requested; {deskMessage.ToLowerInvariant()}" : $"Parcel packed - {selected.Count} items saved; {deskMessage.ToLowerInvariant()}", deskLayout: deskLayout, clearDeskLayout: clearDeskLayout);
             var closed = 0; var stillOpen = 0;
             if (choice == ContentDialogResult.Secondary)
             {
@@ -566,10 +593,10 @@ public sealed partial class ParcelDetailsPage : PageBase
                 var box = new CheckBox { Content = $"{source}   {item.DisplayName}   [{item.TypeLabel}]   {item.AvailabilityLabel}   [{closeState}]", IsChecked = true };
                 checks[item] = box; stack.Children.Add(box);
             }
-            void UpdateSummary() { var selectedNow = checks.Where(pair => pair.Value.IsChecked == true).Select(pair => pair.Key).ToList(); var additions = selectedNow.Count(item => _parcel.Items.All(saved => saved.Id != item.Id)); var removalsNow = _parcel.Items.Count(item => !selectedNow.Contains(item)); var missing = selectedNow.Count(item => item.IsMissing || item.IsInaccessible); summary.Text = $"{selectedNow.Count} SAVED  |  {additions} NEW  |  {removalsNow} REMOVED  |  {missing} UNAVAILABLE"; }
+            void UpdateSummary() { var selectedNow = checks.Where(pair => pair.Value.IsChecked == true).Select(pair => pair.Key).ToList(); var selectedNowIds = selectedNow.Select(item => item.Id).ToHashSet(); var additions = selectedNow.Count(item => _parcel.Items.All(saved => saved.Id != item.Id)); var removalsNow = _parcel.Items.Count(item => !selectedNowIds.Contains(item.Id)); var missing = selectedNow.Count(item => item.IsMissing || item.IsInaccessible); summary.Text = $"{selectedNow.Count} SAVED  |  {additions} NEW  |  {removalsNow} REMOVED  |  {missing} UNAVAILABLE"; }
             foreach (var box in checks.Values) { box.Checked += (_, _) => UpdateSummary(); box.Unchecked += (_, _) => UpdateSummary(); } UpdateSummary();
             var dialog = new ContentDialog { Title = "PACK AWAY", Content = new ScrollViewer { Content = stack, MaxHeight = 420 }, PrimaryButtonText = "SAVE SELECTION", SecondaryButtonText = BrowserIntegrationService.Current.TabClosingEnabled ? "SAVE AND CLOSE SELECTED" : "TAB CLOSING DISABLED", CloseButtonText = "CANCEL", DefaultButton = ContentDialogButton.Primary, XamlRoot = XamlRoot, IsSecondaryButtonEnabled = BrowserIntegrationService.Current.TabClosingEnabled };
-            var choice = await Ui.ShowDialog(dialog); if (choice == ContentDialogResult.None) return; var selected = checks.Where(pair => pair.Value.IsChecked == true).Select(pair => pair.Key).ToList(); var removals = _parcel.Items.Count(item => !selected.Contains(item));
+            var choice = await Ui.ShowDialog(dialog); if (choice == ContentDialogResult.None) return; var selected = checks.Where(pair => pair.Value.IsChecked == true).Select(pair => pair.Key).ToList(); var selectedIds = selected.Select(item => item.Id).ToHashSet(); var removals = _parcel.Items.Count(item => !selectedIds.Contains(item.Id));
             if (removals > 0 && !await Dialogs.Confirm(this, "REMOVE SAVED ITEM RECORDS?", $"{removals} WorkParcel record{(removals == 1 ? string.Empty : "s")} will be removed. External resources stay untouched.", "REMOVE AND SAVE")) return;
             var closeItems = selected.Where(item => item.RuntimeWindowHandle != nint.Zero && item.CloseSupported).ToList(); var closeTabs = selected.Where(item => item.ItemType == ParcelItemType.BrowserTab && item.CloseSupported && !string.IsNullOrWhiteSpace(item.BrowserSessionTabId) && !string.IsNullOrWhiteSpace(item.BrowserSessionWindowId)).ToList();
             // The close confirmation is intentionally shown after the saved selection is committed below.
@@ -599,16 +626,71 @@ public sealed partial class ParcelDetailsPage : PageBase
 
     private async Task RemoveItemAsync(ParcelItem item)
     {
-        if (_parcel is null || !await Dialogs.Confirm(this, "REMOVE ITEM FROM PARCEL?", "Only the WorkParcel record will be removed. The original file, folder, application or link will not be deleted.", "REMOVE RECORD")) return;
-        try { await Store.RemoveItemAsync(_parcel, item); Build(); } catch (Exception exception) { AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "ITEM WAS NOT REMOVED", "The saved record is still in this parcel. Try again."); }
+        var parcel = _parcel;
+        if (parcel is null || _removalInProgress || _busy) return;
+        _removalInProgress = true;
+        try
+        {
+            ConfirmedOperationResult result;
+            try
+            {
+                result = await Dialogs.ConfirmAndRunAsync(this, "REMOVE ITEM FROM PARCEL?", "Only the WorkParcel record will be removed. The original file, folder, application or link will not be deleted.", "REMOVE RECORD", () => Store.RemoveItemAsync(parcel, item));
+            }
+            catch (Exception exception)
+            {
+                AppLogger.LogTechnicalError(exception);
+                await Dialogs.ShowMessage(this, "REMOVAL FAILED", "The database could not remove this record. It is still in this parcel, and the original resource was not changed. Try again.");
+                return;
+            }
+
+            if (!result.Confirmed) return;
+            if (!result.Succeeded)
+            {
+                await Dialogs.ShowMessage(this, "ITEM WAS NOT REMOVED", "The saved record is still in this parcel. Try again.");
+                return;
+            }
+
+            _selectedItemIds.Remove(item.Id);
+            try { Build(); }
+            catch (Exception exception) { AppLogger.LogTechnicalError(exception); RefreshRows(); }
+            await Dialogs.ShowMessage(this, "ITEM REMOVED", "The WorkParcel record was removed. The original resource was not changed.");
+        }
+        finally { _removalInProgress = false; }
     }
 
     private async Task RemoveSelectedAsync()
     {
-        if (_parcel is null) return;
-        var selected = _parcel.Items.Where(item => _selectedItemIds.Contains(item.Id)).ToList(); if (selected.Count == 0) { await Dialogs.ShowMessage(this, "NO ITEMS SELECTED", "Select one or more saved items first."); return; }
-        if (!await Dialogs.Confirm(this, "REMOVE SELECTED ITEMS?", $"Remove {selected.Count} saved item{(selected.Count == 1 ? string.Empty : "s")} from WorkParcel? Original files, folders, applications, tabs and links stay untouched.", "REMOVE RECORDS")) return;
-        try { await Store.RemoveItemsAsync(_parcel, selected); _selectedItemIds.Clear(); Build(); } catch (Exception exception) { AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "ITEMS WERE NOT REMOVED", "The selected records are still in this parcel. Try again."); }
+        var parcel = _parcel;
+        if (parcel is null || _removalInProgress || _busy) return;
+        var selected = parcel.Items.Where(item => _selectedItemIds.Contains(item.Id)).ToList(); if (selected.Count == 0) { await Dialogs.ShowMessage(this, "NO ITEMS SELECTED", "Select one or more saved items first."); return; }
+        _removalInProgress = true;
+        try
+        {
+            ConfirmedOperationResult result;
+            try
+            {
+                result = await Dialogs.ConfirmAndRunAsync(this, "REMOVE SELECTED ITEMS?", $"Remove {selected.Count} saved item{(selected.Count == 1 ? string.Empty : "s")} from WorkParcel? Original files, folders, applications, tabs and links stay untouched.", "REMOVE RECORDS", async () => await Store.RemoveItemsAsync(parcel, selected) == selected.Count);
+            }
+            catch (Exception exception)
+            {
+                AppLogger.LogTechnicalError(exception);
+                await Dialogs.ShowMessage(this, "REMOVAL FAILED", "The database could not remove the selected records. They are still in this parcel, and the original resources were not changed. Try again.");
+                return;
+            }
+
+            if (!result.Confirmed) return;
+            if (!result.Succeeded)
+            {
+                await Dialogs.ShowMessage(this, "ITEMS WERE NOT REMOVED", "The selected records are still in this parcel. Try again.");
+                return;
+            }
+
+            _selectedItemIds.Clear();
+            try { Build(); }
+            catch (Exception exception) { AppLogger.LogTechnicalError(exception); RefreshRows(); }
+            await Dialogs.ShowMessage(this, "ITEMS REMOVED", $"{selected.Count} saved record{(selected.Count == 1 ? string.Empty : "s")} removed. Original resources were not changed.");
+        }
+        finally { _removalInProgress = false; }
     }
 
     private async Task MoveBrowserGroupAsync(ParcelItem item)

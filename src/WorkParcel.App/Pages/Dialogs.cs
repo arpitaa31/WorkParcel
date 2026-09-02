@@ -1,11 +1,13 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using System.Runtime.ExceptionServices;
 using WorkParcel_App.Models;
 using WorkParcel_App.Services;
 
 namespace WorkParcel_App.Pages;
 
 internal sealed record NewParcelDialogResult(bool Captured, string Name, string Description, Parcel? Parcel);
+internal sealed record ConfirmedOperationResult(bool Confirmed, bool Succeeded);
 
 internal static class Dialogs
 {
@@ -96,6 +98,40 @@ internal static class Dialogs
     }
 
     public static async Task<bool> Confirm(Page page, string title, string message, string confirm = "CONFIRM") => await Ui.ShowDialog(new ContentDialog { Title = title, Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap }, PrimaryButtonText = confirm, CloseButtonText = "CANCEL", XamlRoot = page.XamlRoot }) == ContentDialogResult.Primary;
+
+    public static async Task<ConfirmedOperationResult> ConfirmAndRunAsync(Page page, string title, string message, string confirm, Func<Task<bool>> operation)
+    {
+        var dialog = new ContentDialog
+        {
+            Title = title,
+            Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+            PrimaryButtonText = confirm,
+            CloseButtonText = "CANCEL",
+            XamlRoot = page.XamlRoot
+        };
+        var busy = false;
+        var confirmed = false;
+        var succeeded = false;
+        Exception? failure = null;
+
+        dialog.PrimaryButtonClick += async (_, args) =>
+        {
+            args.Cancel = true;
+            if (busy) return;
+            busy = true;
+            confirmed = true;
+            dialog.IsPrimaryButtonEnabled = false;
+            dialog.PrimaryButtonText = "REMOVING…";
+            try { succeeded = await operation(); }
+            catch (Exception exception) { failure = exception; }
+            dialog.Hide();
+        };
+        dialog.CloseButtonClick += (_, args) => { if (busy) args.Cancel = true; };
+
+        await Ui.ShowDialog(dialog);
+        if (failure is not null) ExceptionDispatchInfo.Capture(failure).Throw();
+        return new ConfirmedOperationResult(confirmed, succeeded);
+    }
 
     public static async Task ShowMessage(Page page, string title, string message) => await Ui.ShowDialog(new ContentDialog { Title = title, Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap }, CloseButtonText = "OK", XamlRoot = page.XamlRoot });
 

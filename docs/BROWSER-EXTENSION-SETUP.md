@@ -19,21 +19,21 @@ Open PowerShell as the current Windows user and run the command for each browser
 ```powershell
 $installRoot = Join-Path $env:LOCALAPPDATA 'Programs\WorkParcel'
 $setup = Join-Path $installRoot 'BrowserHost\Setup-BrowserHost.ps1'
-$host = Join-Path $installRoot 'BrowserHost\WorkParcel.BrowserHost.exe'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Browser Chrome -HostExecutablePath $host -ChromeExtensionId '<exact-chrome-id>'
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Browser Edge -HostExecutablePath $host -EdgeExtensionId '<exact-edge-id>'
+$hostExecutablePath = Join-Path $installRoot 'BrowserHost\WorkParcel.BrowserHost.exe'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Browser Chrome -HostExecutablePath $hostExecutablePath -ChromeExtensionId '<exact-chrome-id>'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Browser Edge -HostExecutablePath $hostExecutablePath -EdgeExtensionId '<exact-edge-id>'
 ```
 
-Rerun the same command after reloading the unpacked extension or after an application update. In WorkParcel, **Settings → Browser Integration → SET UP** and **REPAIR CONNECTION** show the matching command. **TEST CONNECTION** checks the live bridge. Restart the browser if it has cached the previous host registration.
+Rerun the same command after reloading the unpacked extension or after an application update. In WorkParcel, open **Settings -> BROWSER TABS** and use the guided **CONNECT CHROME** or **CONNECT EDGE** flow. The browser card's **ADVANCED DETAILS** section retains **Repair connection**, **View setup help**, and **Test connection** when manual registration is needed. Restart the browser if it has cached the previous host registration.
 
 ## Remove registration
 
 Use the same installed paths and exact ID, adding `-Remove`:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Browser Chrome -HostExecutablePath $host -ChromeExtensionId '<exact-chrome-id>' -Remove
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $setup -Browser Chrome -HostExecutablePath $hostExecutablePath -ChromeExtensionId '<exact-chrome-id>' -Remove
 ```
 
-Use the matching Edge parameters for Edge, or `-Browser Both` with both exact IDs. **REMOVE CONNECTION** in WorkParcel Settings removes the current-user registration; it does not remove the browser extension.
+Use the matching Edge parameters for Edge, or `-Browser Both` with both exact IDs. In WorkParcel, **Settings -> BROWSER TABS -> ADVANCED DETAILS -> Remove connection** removes the current-user registration after confirmation; it does not remove the browser extension.
 
 The native host allows only the exact `chrome-extension://<id>/` origins supplied to the setup script. No browser profile, cookies, page contents, or credentials are packaged or read.

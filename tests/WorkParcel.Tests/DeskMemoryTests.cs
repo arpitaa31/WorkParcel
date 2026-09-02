@@ -126,6 +126,68 @@ public sealed class DeskMemoryTests
     }
 
     [Fact]
+    public async Task RemovingAnApplicationWindowAlsoRemovesItsDeskMemoryReference()
+    {
+        using var temp = new TestDirectory();
+        var paths = new AppDataPaths(temp.Path);
+        var store = await CreateStoreAsync(paths);
+        var monitor = Monitor("DISPLAY1", true, new DeskRect(0, 0, 1920, 1080), new DeskRect(0, 0, 1920, 1040));
+        var item = new ParcelItem { ItemType = ParcelItemType.ApplicationWindow, DisplayName = "Editor", ExecutablePath = "C:\\Apps\\editor.exe", Value = "C:\\Apps\\editor.exe", RuntimeWindowHandle = (nint)11 };
+        var capture = DeskMemoryLogic.BuildCapture(Guid.NewGuid(), new[] { item }, new DeskSystemSnapshot(new[] { monitor }, new[] { Window((nint)11, "C:\\Apps\\editor.exe", "editor", "Editor", monitor, 0) }));
+        var parcel = await store.CreateWithItemsAsync("Desk removal", "", new[] { item }, deskLayout: capture.Snapshot, parcelId: capture.Snapshot.ParcelId);
+
+        Assert.True(await store.RemoveItemAsync(parcel, new ParcelItem { Id = item.Id, ParcelId = parcel.Id, ItemType = ParcelItemType.ApplicationWindow }));
+        Assert.Null(parcel.DeskLayout);
+
+        var restarted = await CreateStoreAsync(paths);
+        var loaded = Assert.Single(restarted.Parcels);
+        Assert.Empty(loaded.Items);
+        Assert.Null(loaded.DeskLayout);
+        Assert.Equal(0L, await ScalarAsync(paths.DatabasePath, "SELECT COUNT(*) FROM DeskWindowLayouts;"));
+        Assert.Equal(0L, await ScalarAsync(paths.DatabasePath, "SELECT COUNT(*) FROM DeskLayoutSnapshots;"));
+    }
+
+    [Fact]
+    public async Task ReplacingPackSelectionClearsDeskMemoryWhenNoWindowRemains()
+    {
+        using var temp = new TestDirectory();
+        var paths = new AppDataPaths(temp.Path);
+        var store = await CreateStoreAsync(paths);
+        var monitor = Monitor("DISPLAY1", true, new DeskRect(0, 0, 1920, 1080), new DeskRect(0, 0, 1920, 1040));
+        var item = new ParcelItem { ItemType = ParcelItemType.ApplicationWindow, DisplayName = "Editor", ExecutablePath = "C:\\Apps\\editor.exe", Value = "C:\\Apps\\editor.exe", RuntimeWindowHandle = (nint)11 };
+        var capture = DeskMemoryLogic.BuildCapture(Guid.NewGuid(), new[] { item }, new DeskSystemSnapshot(new[] { monitor }, new[] { Window((nint)11, "C:\\Apps\\editor.exe", "editor", "Editor", monitor, 0) }));
+        var parcel = await store.CreateWithItemsAsync("Desk update", "", new[] { item }, deskLayout: capture.Snapshot, parcelId: capture.Snapshot.ParcelId);
+
+        await store.ReplaceItemsAsync(parcel, Array.Empty<ParcelItem>(), "Pack away without windows", clearDeskLayout: true);
+        Assert.Empty(parcel.Items);
+        Assert.Null(parcel.DeskLayout);
+        var restarted = await CreateStoreAsync(paths);
+        Assert.Null(Assert.Single(restarted.Parcels).DeskLayout);
+    }
+
+    [Fact]
+    public async Task RestartIgnoresOrphanedDeskMemoryRowsFromAnOlderDeletionPath()
+    {
+        using var temp = new TestDirectory();
+        var paths = new AppDataPaths(temp.Path);
+        var store = await CreateStoreAsync(paths);
+        var monitor = Monitor("DISPLAY1", true, new DeskRect(0, 0, 1920, 1080), new DeskRect(0, 0, 1920, 1040));
+        var item = new ParcelItem { ItemType = ParcelItemType.ApplicationWindow, DisplayName = "Editor", ExecutablePath = "C:\\Apps\\editor.exe", Value = "C:\\Apps\\editor.exe", RuntimeWindowHandle = (nint)11 };
+        var capture = DeskMemoryLogic.BuildCapture(Guid.NewGuid(), new[] { item }, new DeskSystemSnapshot(new[] { monitor }, new[] { Window((nint)11, "C:\\Apps\\editor.exe", "editor", "Editor", monitor, 0) }));
+        var parcel = await store.CreateWithItemsAsync("Orphaned desk row", "", new[] { item }, deskLayout: capture.Snapshot, parcelId: capture.Snapshot.ParcelId);
+
+        await using (var db = new SqliteConnection($"Data Source={paths.DatabasePath}"))
+        {
+            await db.OpenAsync();
+            var delete = db.CreateCommand(); delete.CommandText = "DELETE FROM ParcelItems WHERE Id=$id;"; delete.Parameters.AddWithValue("$id", item.Id.ToString());
+            Assert.Equal(1, await delete.ExecuteNonQueryAsync());
+        }
+
+        var restarted = await CreateStoreAsync(paths);
+        Assert.Null(Assert.Single(restarted.Parcels).DeskLayout);
+    }
+
+    [Fact]
     public async Task DeskMemorySafetySettingsPersistWithBoundedTimeout()
     {
         using var temp = new TestDirectory();
@@ -170,6 +232,21 @@ public sealed class DeskMemoryTests
         var undo = await service.UndoLastAsync();
         Assert.Equal(1, undo.RestoredCount);
         Assert.Equal(3, provider.Applied.Count);
+    }
+
+    [Fact]
+    public async Task RestoreUsesTheConfiguredUndoLifetime()
+    {
+        var monitor = Monitor("DISPLAY1", true, new DeskRect(0, 0, 1920, 1080), new DeskRect(0, 0, 1920, 1040));
+        var item = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.ApplicationWindow, DisplayName = "Editor", ExecutablePath = "C:\\Apps\\editor.exe", Value = "C:\\Apps\\editor.exe", RuntimeWindowHandle = (nint)11 };
+        var provider = new FakeProvider(new DeskSystemSnapshot(new[] { monitor }, new[] { Window((nint)11, "C:\\Apps\\editor.exe", "editor", "Editor", monitor, 0, bounds: new DeskRect(300, 200, 800, 600)) }));
+        var capture = DeskMemoryLogic.BuildCapture(Guid.NewGuid(), new[] { item }, new DeskSystemSnapshot(new[] { monitor }, new[] { Window((nint)11, "C:\\Apps\\editor.exe", "editor", "Editor", monitor, 0, bounds: new DeskRect(30, 40, 900, 700)) }));
+        var service = new DeskMemoryService(provider);
+
+        await service.RestoreAsync(capture.Snapshot, new DeskRestoreOptions(EnableUndo: true, TimeoutSeconds: 2, UndoLifetime: TimeSpan.FromMilliseconds(1)));
+
+        var undo = await service.UndoLastAsync();
+        Assert.Equal(DeskRestoreResultKind.TimedOut, Assert.Single(undo.Items).Kind);
     }
 
     [Fact]

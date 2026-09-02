@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.Versioning;
 using System.Text.Json;
 using WorkParcel.Core.Browser;
 using WorkParcel_App.Models;
@@ -18,10 +19,82 @@ public enum BrowserConnectionStatus
     Connecting,
     BrowserNotFound,
     BrowserNotRunning,
+    Disabled,
+    Disconnected
+}
+
+public enum BrowserConnectionState
+{
+    BrowserMissing,
+    NotConfigured,
+    ExtensionRequired,
+    DesktopConnectionRequired,
+    ReadyToTest,
+    Connected,
+    ConnectionFailed,
     Disabled
 }
 
-public sealed record BrowserConnectionInfo(string Browser, BrowserConnectionStatus Status, string? ExtensionVersion, DateTimeOffset? LastConnectedUtc, int ActiveConnections, string? LastError, int WindowCount = 0, int TabCount = 0, string? ConnectionId = null, bool BrowserInstalled = false, bool HostInstalled = false, int ProtocolVersion = 0, bool ProtocolCompatible = false);
+public enum BrowserSetupStep
+{
+    InstallExtension = 1,
+    ConnectDesktop = 2,
+    TestConnection = 3,
+    Complete = 4
+}
+
+public sealed record BrowserConnectionInfo(string Browser, BrowserConnectionStatus Status, string? ExtensionVersion, DateTimeOffset? LastConnectedUtc, int ActiveConnections, string? LastError, int WindowCount = 0, int TabCount = 0, string? ConnectionId = null, bool BrowserInstalled = false, bool HostInstalled = false, int ProtocolVersion = 0, bool ProtocolCompatible = false, bool ExtensionDetected = false);
+
+public sealed record BrowserConnectionStateInfo(BrowserConnectionInfo Details, BrowserConnectionState State);
+
+public static class BrowserConnectionStateLogic
+{
+    public static BrowserConnectionState Derive(BrowserConnectionInfo info)
+    {
+        if (info.Status == BrowserConnectionStatus.Disabled) return BrowserConnectionState.Disabled;
+        if (info.Status == BrowserConnectionStatus.Connected) return BrowserConnectionState.Connected;
+        if (!info.BrowserInstalled || info.Status == BrowserConnectionStatus.BrowserNotFound) return BrowserConnectionState.BrowserMissing;
+        if (info.Status == BrowserConnectionStatus.Disconnected) return BrowserConnectionState.NotConfigured;
+        if (info.Status is BrowserConnectionStatus.ConnectionLost or BrowserConnectionStatus.ConnectionError or BrowserConnectionStatus.VersionMismatch) return BrowserConnectionState.ConnectionFailed;
+        if (info.Status == BrowserConnectionStatus.Connecting) return BrowserConnectionState.ReadyToTest;
+        // A running browser with no detected extension is at the first setup
+        // step, even when the desktop registration is also absent. Do not make
+        // the user infer which technical flag to fix from a generic status.
+        if (info.Status == BrowserConnectionStatus.NativeHostNotInstalled && !info.ExtensionDetected) return BrowserConnectionState.ExtensionRequired;
+        if (info.Status == BrowserConnectionStatus.BrowserNotRunning) return info.HostInstalled ? BrowserConnectionState.ConnectionFailed : BrowserConnectionState.NotConfigured;
+        if (info.ExtensionDetected && !info.HostInstalled) return BrowserConnectionState.DesktopConnectionRequired;
+        if (!info.ExtensionDetected) return BrowserConnectionState.ExtensionRequired;
+        if (!info.HostInstalled) return BrowserConnectionState.DesktopConnectionRequired;
+        if (info.ExtensionDetected && info.HostInstalled) return BrowserConnectionState.ReadyToTest;
+        return BrowserConnectionState.NotConfigured;
+    }
+
+    public static string? PrimaryAction(BrowserConnectionState state, string browser) => state switch
+    {
+        BrowserConnectionState.Connected => "REFRESH TABS",
+        BrowserConnectionState.BrowserMissing => null,
+        BrowserConnectionState.ExtensionRequired => "INSTALL EXTENSION",
+        BrowserConnectionState.DesktopConnectionRequired => "CONNECT TO WORKPARCEL",
+        BrowserConnectionState.ReadyToTest => "TEST CONNECTION",
+        BrowserConnectionState.ConnectionFailed => "FIX CONNECTION",
+        BrowserConnectionState.Disabled => "ENABLE BROWSER TABS",
+        _ => $"CONNECT {browser.ToUpperInvariant()}"
+    };
+}
+
+public static class BrowserSetupStepLogic
+{
+    public static BrowserSetupStep For(BrowserConnectionStateInfo info)
+    {
+        if (info.State == BrowserConnectionState.Connected) return BrowserSetupStep.Complete;
+        if (info.State is BrowserConnectionState.Disabled or BrowserConnectionState.BrowserMissing) return BrowserSetupStep.InstallExtension;
+        if (info.State == BrowserConnectionState.DesktopConnectionRequired) return BrowserSetupStep.ConnectDesktop;
+        if (info.State is BrowserConnectionState.ReadyToTest or BrowserConnectionState.ConnectionFailed) return BrowserSetupStep.TestConnection;
+        if (info.Details.ExtensionDetected && info.Details.HostInstalled) return BrowserSetupStep.TestConnection;
+        if (info.Details.ExtensionDetected) return BrowserSetupStep.ConnectDesktop;
+        return BrowserSetupStep.InstallExtension;
+    }
+}
 
 public sealed class BrowserIntegrationService : IDisposable
 {
@@ -29,6 +102,7 @@ public sealed class BrowserIntegrationService : IDisposable
     public const string ExpectedExtensionVersion = "0.1.0";
     private readonly ConcurrentDictionary<string, BrowserPipeSession> _sessions = new();
     private readonly ConcurrentDictionary<string, BrowserConnectionInfo> _lastKnown = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _manuallyDisconnected = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly string _pipeName;
     private readonly TimeSpan _requestTimeout;
@@ -36,13 +110,16 @@ public sealed class BrowserIntegrationService : IDisposable
     private int _started;
     private int _enabled = 1;
     private int _tabClosingEnabled = 1;
+    private readonly string? _preferencesPath;
 
-    public BrowserIntegrationService(string? pipeName = null, TimeSpan? requestTimeout = null)
+    public BrowserIntegrationService(string? pipeName = null, TimeSpan? requestTimeout = null, string? preferencesPath = null)
     {
         _pipeName = string.IsNullOrWhiteSpace(pipeName) ? BrowserProtocol.PipeName : pipeName.Trim();
         if (_pipeName.Length > 256 || _pipeName.Contains('\\') || _pipeName.Contains('/')) throw new ArgumentException("Pipe name is invalid.", nameof(pipeName));
         _requestTimeout = requestTimeout ?? TimeSpan.FromSeconds(6);
         if (_requestTimeout <= TimeSpan.Zero || _requestTimeout > TimeSpan.FromMinutes(2)) throw new ArgumentOutOfRangeException(nameof(requestTimeout));
+        _preferencesPath = preferencesPath ?? (string.IsNullOrWhiteSpace(pipeName) ? Path.Combine(new AppDataPaths().DataDirectory, "browser-preferences.json") : null);
+        LoadPreferences();
     }
 
     public static BrowserIntegrationService Current => Lazy.Value;
@@ -51,6 +128,12 @@ public sealed class BrowserIntegrationService : IDisposable
     public IReadOnlyList<BrowserConnectionInfo> Connections => _sessions.Values.Select(session => session.Info).ToList();
     public bool IsEnabled => Volatile.Read(ref _enabled) == 1;
     public bool TabClosingEnabled => Volatile.Read(ref _tabClosingEnabled) == 1;
+
+    public BrowserConnectionStateInfo GetConnectionState(string browser)
+    {
+        var details = GetStatus(browser);
+        return new(details, BrowserConnectionStateLogic.Derive(details));
+    }
 
     public void Start()
     {
@@ -64,14 +147,23 @@ public sealed class BrowserIntegrationService : IDisposable
         var matches = _sessions.Values.Where(session => string.Equals(session.Browser, browser, StringComparison.OrdinalIgnoreCase)).ToList();
         var installed = BrowserInstallationService.IsInstalled(browser);
         var hostInstalled = HostRegistrationService.IsRegistered(browser);
+        if (_manuallyDisconnected.ContainsKey(browser))
+        {
+            var disconnected = _lastKnown.TryGetValue(browser, out var knownDisconnected)
+                ? knownDisconnected
+                : new BrowserConnectionInfo(browser, BrowserConnectionStatus.Disconnected, null, null, 0, null);
+            return disconnected with { Status = BrowserConnectionStatus.Disconnected, LastError = null, ActiveConnections = 0, BrowserInstalled = installed, HostInstalled = hostInstalled };
+        }
         if (matches.Count == 0)
         {
             if (installed && hostInstalled && _sessions.Values.Any(session => session.Browser == "unknown" && session.LastError is null))
                 return new(browser, BrowserConnectionStatus.Connecting, null, null, 0, null, 0, 0, null, installed, hostInstalled);
             var running = installed && BrowserInstallationService.IsRunning(browser);
             var status = !installed ? BrowserConnectionStatus.BrowserNotFound : !hostInstalled ? BrowserConnectionStatus.NativeHostNotInstalled : !running ? BrowserConnectionStatus.BrowserNotRunning : BrowserConnectionStatus.ExtensionNotDetected;
-            if (running && _lastKnown.TryGetValue(browser, out var previous) && previous.Status is BrowserConnectionStatus.ConnectionLost or BrowserConnectionStatus.ConnectionError or BrowserConnectionStatus.VersionMismatch)
+            if (installed && _lastKnown.TryGetValue(browser, out var previous) && previous.Status is BrowserConnectionStatus.ConnectionLost or BrowserConnectionStatus.ConnectionError or BrowserConnectionStatus.VersionMismatch)
                 return previous with { ActiveConnections = 0, BrowserInstalled = installed, HostInstalled = hostInstalled };
+            if (_lastKnown.TryGetValue(browser, out var known) && known.Status == BrowserConnectionStatus.Connected && known.ExtensionDetected && !hostInstalled)
+                return known with { Status = BrowserConnectionStatus.NativeHostNotInstalled, ActiveConnections = 0, BrowserInstalled = installed, HostInstalled = hostInstalled };
             return new(browser, status, null, null, 0, null, 0, 0, null, installed, hostInstalled);
         }
         var session = matches.OrderByDescending(item => item.Info.LastConnectedUtc).First();
@@ -80,7 +172,13 @@ public sealed class BrowserIntegrationService : IDisposable
 
     private void Remember(BrowserConnectionInfo info)
     {
-        if (info.Browser is "chrome" or "edge") _lastKnown[info.Browser] = info;
+        if (info.Browser is not ("chrome" or "edge")) return;
+        if (_manuallyDisconnected.ContainsKey(info.Browser))
+        {
+            _lastKnown[info.Browser] = info with { Status = BrowserConnectionStatus.Disconnected, LastError = null, ActiveConnections = 0 };
+            return;
+        }
+        _lastKnown[info.Browser] = info;
     }
 
     public async Task<IReadOnlyList<BrowserTabData>> ListTabsAsync(string? browser = null, CancellationToken cancellationToken = default)
@@ -176,26 +274,35 @@ public sealed class BrowserIntegrationService : IDisposable
 
     public void Disconnect(string browser)
     {
+        _manuallyDisconnected[browser] = 0;
         foreach (var session in _sessions.Values.Where(session => string.Equals(session.Browser, browser, StringComparison.OrdinalIgnoreCase))) session.Disconnect();
+        _lastKnown[browser] = new BrowserConnectionInfo(browser, BrowserConnectionStatus.Disconnected, null, null, 0, null, BrowserInstalled: BrowserInstallationService.IsInstalled(browser), HostInstalled: HostRegistrationService.IsRegistered(browser));
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    public void RemoveRegistration(string browser)
+    public bool RemoveRegistration(string browser)
     {
-        HostRegistrationService.Remove(browser);
-        Disconnect(browser);
+        if (!OperatingSystem.IsWindows()) return false;
+        var removed = HostRegistrationService.Remove(browser);
+        // A failed registry delete must not silently disconnect an otherwise
+        // working browser session. The caller can retry the removal while the
+        // browser connection and its saved state remain untouched.
+        if (removed) Disconnect(browser);
+        return removed;
     }
 
     public void SetEnabled(bool enabled)
     {
         Interlocked.Exchange(ref _enabled, enabled ? 1 : 0);
         if (!enabled) foreach (var session in _sessions.Values) session.Disconnect();
+        SavePreferences();
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void SetTabClosingEnabled(bool enabled)
     {
         Interlocked.Exchange(ref _tabClosingEnabled, enabled ? 1 : 0);
+        SavePreferences();
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -232,7 +339,10 @@ public sealed class BrowserIntegrationService : IDisposable
             .Where(item => string.Equals(item.BrowserFamily, liveTab.Browser, StringComparison.OrdinalIgnoreCase))
             .ToList();
         var urlCandidates = candidates.Where(item => SameRestorableUrl(item.Value, liveTab.Url)).ToList();
-        if (liveToSavedGroups is not null && liveToSavedGroups.TryGetValue(liveTab.WindowGroupKey, out var assignedGroup))
+        var liveGroupKey = BuildLiveGroupKey(liveTab);
+        if (liveToSavedGroups is not null &&
+            (liveToSavedGroups.TryGetValue(liveGroupKey, out var assignedGroup) ||
+             liveToSavedGroups.TryGetValue(liveTab.WindowGroupKey, out assignedGroup)))
             urlCandidates = urlCandidates.Where(item => string.Equals(item.BrowserWindowGroupId, assignedGroup, StringComparison.OrdinalIgnoreCase)).ToList();
         if (urlCandidates.Count == 0) return null;
         var ranked = urlCandidates.Select(item => (Item: item, Score: TabMatchScore(item, liveTab)))
@@ -240,9 +350,13 @@ public sealed class BrowserIntegrationService : IDisposable
         var best = ranked[0];
         var margin = best.Score - ranked.Skip(1).Select(candidate => candidate.Score).FirstOrDefault();
         if (ranked.Count > 1 && margin < 8) return null;
-        liveToSavedGroups?[liveTab.WindowGroupKey] = best.Item.BrowserWindowGroupId ?? liveTab.WindowGroupKey;
+        if (liveToSavedGroups is not null)
+            liveToSavedGroups[liveGroupKey] = best.Item.BrowserWindowGroupId ?? liveTab.WindowGroupKey;
         return best.Item;
     }
+
+    private static string BuildLiveGroupKey(BrowserTabData tab) =>
+        string.Join("\u001F", tab.Browser, tab.ConnectionId ?? string.Empty, tab.WindowGroupKey);
 
     public static void ApplyLiveTab(ParcelItem item, BrowserTabData tab, bool updateSavedWindowGroup = false)
     {
@@ -355,7 +469,7 @@ public sealed class BrowserIntegrationService : IDisposable
         public string ConnectionKey { get; set; } = string.Empty; public string Browser { get; private set; } = "unknown"; public string? ExtensionVersion { get; private set; } public DateTimeOffset? LastConnected { get; private set; } public string? LastError { get; private set; } public BrowserTabSnapshot? LatestSnapshot { get; private set; } public int ProtocolVersion { get; private set; } public bool ProtocolCompatible { get; private set; } public bool VersionMismatchDetected { get; private set; } public BrowserConnectionStatus FailureStatus { get; private set; } = BrowserConnectionStatus.ConnectionLost;
         public string FailureResultStatus => FailureStatus == BrowserConnectionStatus.ConnectionError ? "ConnectionError" : "ConnectionLost";
         public string FailureResultMessage => FailureStatus == BrowserConnectionStatus.ConnectionError ? "The browser connection timed out or returned an error. Reconnect and try again." : "The browser extension did not respond. Try again after reconnecting.";
-        public BrowserConnectionInfo Info => new(Browser, Status, ExtensionVersion, LastConnected, 1, LastError, LatestSnapshot?.WindowCount ?? 0, LatestSnapshot?.Tabs.Count ?? 0, ConnectionKey, false, false, ProtocolVersion, ProtocolCompatible);
+        public BrowserConnectionInfo Info => new(Browser, Status, ExtensionVersion, LastConnected, 1, LastError, LatestSnapshot?.WindowCount ?? 0, LatestSnapshot?.Tabs.Count ?? 0, ConnectionKey, false, false, ProtocolVersion, ProtocolCompatible, Browser is "chrome" or "edge");
         private BrowserConnectionStatus Status => VersionMismatchDetected ? BrowserConnectionStatus.VersionMismatch : LastError is not null ? FailureStatus : Browser == "unknown" ? BrowserConnectionStatus.Connecting : BrowserConnectionStatus.Connected;
 
         public async Task RunAsync(CancellationToken cancellationToken)
@@ -427,6 +541,7 @@ public sealed class BrowserIntegrationService : IDisposable
             if (message.Type == "hello")
             {
                 Browser = message.Browser is "chrome" or "edge" ? message.Browser : "unknown";
+                if (Browser is "chrome" or "edge") _owner.ClearManualDisconnect(Browser);
                 ExtensionVersion = message.ExtensionVersion;
                 ProtocolVersion = message.Version;
                 ProtocolCompatible = message.Version == BrowserProtocol.CurrentVersion;
@@ -473,11 +588,42 @@ public sealed class BrowserIntegrationService : IDisposable
 
     private sealed record BrowserOperationEnvelope(string Status, IReadOnlyList<BrowserOperationResult> Results);
     private sealed record BrowserErrorEnvelope(string? Code, string? Message);
+
+    private sealed record BrowserPreferences(bool Enabled, bool TabClosingEnabled);
+
+    private void LoadPreferences()
+    {
+        if (_preferencesPath is null || !File.Exists(_preferencesPath)) return;
+        try
+        {
+            var preferences = JsonSerializer.Deserialize<BrowserPreferences>(File.ReadAllText(_preferencesPath));
+            if (preferences is not null)
+            {
+                Interlocked.Exchange(ref _enabled, preferences.Enabled ? 1 : 0);
+                Interlocked.Exchange(ref _tabClosingEnabled, preferences.TabClosingEnabled ? 1 : 0);
+            }
+        }
+        catch (Exception exception) { AppLogger.LogTechnicalError(exception); }
+    }
+
+    private void SavePreferences()
+    {
+        if (_preferencesPath is null) return;
+        try
+        {
+            var directory = Path.GetDirectoryName(_preferencesPath);
+            if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+            File.WriteAllText(_preferencesPath, JsonSerializer.Serialize(new BrowserPreferences(IsEnabled, TabClosingEnabled)));
+        }
+        catch (Exception exception) { AppLogger.LogTechnicalError(exception); }
+    }
+
+    private void ClearManualDisconnect(string browser) => _manuallyDisconnected.TryRemove(browser, out _);
 }
 
 public static class BrowserInstallationService
 {
-    public static bool IsInstalled(string browser)
+    public static string? FindExecutable(string browser)
     {
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
@@ -485,8 +631,10 @@ public static class BrowserInstallationService
         var candidates = browser.Equals("edge", StringComparison.OrdinalIgnoreCase)
             ? new[] { Path.Combine(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"), Path.Combine(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"), Path.Combine(local, "Microsoft", "Edge", "Application", "msedge.exe") }
             : new[] { Path.Combine(programFiles, "Google", "Chrome", "Application", "chrome.exe"), Path.Combine(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"), Path.Combine(local, "Google", "Chrome", "Application", "chrome.exe") };
-        return candidates.Any(File.Exists);
+        return candidates.FirstOrDefault(File.Exists);
     }
+
+    public static bool IsInstalled(string browser) => FindExecutable(browser) is not null;
 
     public static bool IsRunning(string browser)
     {
@@ -497,17 +645,73 @@ public static class BrowserInstallationService
 
 public static class HostRegistrationService
 {
+    internal static string RegistrationPath(string browser) => browser.Equals("edge", StringComparison.OrdinalIgnoreCase)
+        ? @"Software\Microsoft\Edge\NativeMessagingHosts\com.workparcel.browser"
+        : @"Software\Google\Chrome\NativeMessagingHosts\com.workparcel.browser";
+
     public static bool IsRegistered(string browser)
     {
         if (!OperatingSystem.IsWindows()) return false;
-        var basePath = browser.Equals("edge", StringComparison.OrdinalIgnoreCase) ? @"Software\Microsoft\Edge\NativeMessagingHosts\com.workparcel.browser" : @"Software\Google\Chrome\NativeMessagingHosts\com.workparcel.browser";
+        var basePath = RegistrationPath(browser);
         try { using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(basePath); return key?.GetValue(string.Empty) is string path && File.Exists(path); } catch { return false; }
     }
 
-    public static void Remove(string browser)
+    [SupportedOSPlatform("windows")]
+    public static bool Remove(string browser)
     {
-        if (!OperatingSystem.IsWindows()) return;
-        var basePath = browser.Equals("edge", StringComparison.OrdinalIgnoreCase) ? @"Software\Microsoft\Edge\NativeMessagingHosts\com.workparcel.browser" : @"Software\Google\Chrome\NativeMessagingHosts\com.workparcel.browser";
-        try { Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(basePath, throwOnMissingSubKey: false); } catch { }
+        if (!OperatingSystem.IsWindows()) return false;
+        var basePath = RegistrationPath(browser);
+        return TryRemoveRegistration(
+            basePath,
+            path => Microsoft.Win32.Registry.CurrentUser.DeleteSubKeyTree(path, throwOnMissingSubKey: false),
+            path =>
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(path);
+                return key is not null;
+            });
+    }
+
+    internal static bool TryRemoveRegistration(string path, Action<string> delete, Func<string, bool> exists)
+    {
+        try
+        {
+            delete(path);
+            return !exists(path);
+        }
+        catch (Exception exception)
+        {
+            AppLogger.LogTechnicalError(exception);
+            return false;
+        }
+    }
+
+    public static string? GetRegisteredExtensionId(string browser) => GetRegisteredExtensionIds(browser)?.Split(", ", StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+
+    public static string? GetRegisteredExtensionIds(string browser)
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        var basePath = RegistrationPath(browser);
+        try
+        {
+            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(basePath);
+            var manifestPath = key?.GetValue(string.Empty) as string;
+            if (string.IsNullOrWhiteSpace(manifestPath) || !File.Exists(manifestPath)) return null;
+            using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            if (!document.RootElement.TryGetProperty("allowed_origins", out var origins) || origins.ValueKind != JsonValueKind.Array) return null;
+            var ids = new List<string>();
+            foreach (var origin in origins.EnumerateArray())
+            {
+                var value = origin.GetString();
+                const string prefix = "chrome-extension://";
+                if (value?.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    var id = value[prefix.Length..].TrimEnd('/');
+                    if (id.Length == 32 && id.All(character => character is >= 'a' and <= 'p') && !ids.Contains(id, StringComparer.OrdinalIgnoreCase)) ids.Add(id);
+                }
+            }
+            return ids.Count == 0 ? null : string.Join(", ", ids);
+        }
+        catch (Exception exception) { AppLogger.LogTechnicalError(exception); }
+        return null;
     }
 }

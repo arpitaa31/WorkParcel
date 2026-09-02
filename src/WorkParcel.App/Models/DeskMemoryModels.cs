@@ -225,6 +225,8 @@ public sealed record DeskUndoWindowState(nint Handle, DeskRect NormalBounds, Des
 public sealed class DeskUndoOperation
 {
     public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;
+    public TimeSpan Lifetime { get; init; } = TimeSpan.FromMinutes(5);
     public IReadOnlyList<DeskUndoWindowState> Windows { get; init; } = Array.Empty<DeskUndoWindowState>();
+    public bool IsExpired() => DateTime.UtcNow - CreatedAtUtc > Lifetime;
     public bool IsExpired(TimeSpan lifetime) => DateTime.UtcNow - CreatedAtUtc > lifetime;
 }

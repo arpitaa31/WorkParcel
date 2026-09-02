@@ -135,8 +135,8 @@ public sealed partial class CapturePage : PageBase
     private void RebuildItemSections()
     {
         _itemHost.Children.Clear(); UpdateSelectedText(); AddCategory("OPEN APPS & WINDOWS", _draft.Where(item => item.ItemType is ParcelItemType.ApplicationWindow or ParcelItemType.Application));
-        var browserInfo = Ui.Stack(3); var chrome = BrowserIntegrationService.Current.GetStatus("chrome"); var edge = BrowserIntegrationService.Current.GetStatus("edge"); browserInfo.Children.Add(Ui.Mono($"CHROME   {BrowserStatusText(chrome)}   ·   EDGE   {BrowserStatusText(edge)}", 10, chrome.Status == BrowserConnectionStatus.Connected || edge.Status == BrowserConnectionStatus.Connected ? "#9BE28F" : "#F0B45B", true)); browserInfo.Children.Add(Ui.Text("Only non-private HTTP/HTTPS tabs are offered. Browser-internal pages stay out of the parcel.", 11, false, "#8D9CA2")); _itemHost.Children.Add(Ui.Card(browserInfo, 12));
-        var connectChrome = Ui.Button("CONNECT CHROME"); connectChrome.Click += (_, _) => Frame?.Navigate(typeof(SettingsPage)); browserInfo.Children.Add(connectChrome);
+        var browserInfo = Ui.Stack(3); var chrome = BrowserIntegrationService.Current.GetConnectionState("chrome"); var edge = BrowserIntegrationService.Current.GetConnectionState("edge"); browserInfo.Children.Add(Ui.Mono($"CHROME   {BrowserStateText(chrome)}   ·   EDGE   {BrowserStateText(edge)}", 10, chrome.State == BrowserConnectionState.Connected || edge.State == BrowserConnectionState.Connected ? "#9BE28F" : "#F0B45B", true)); browserInfo.Children.Add(Ui.Text("Only non-private HTTP/HTTPS tabs are offered. Browser-internal pages stay out of the parcel.", 11, false, "#8D9CA2")); _itemHost.Children.Add(Ui.Card(browserInfo, 12));
+        var connectChrome = Ui.Button("CONNECT A BROWSER"); connectChrome.Click += (_, _) => Frame?.Navigate(typeof(SettingsPage)); browserInfo.Children.Add(connectChrome);
         AddBrowserTree(); AddCategory("BROWSER LINKS", _draft.Where(item => item.ItemType == ParcelItemType.WebLink)); AddCategory("FILES", _draft.Where(item => item.ItemType == ParcelItemType.File)); AddCategory("FOLDERS", _draft.Where(item => item.ItemType == ParcelItemType.Folder)); AddCategory("NOTES", _draft.Where(item => item.ItemType == ParcelItemType.Note));
     }
 
@@ -231,8 +231,8 @@ public sealed partial class CapturePage : PageBase
                 if (live is null) continue;
                 match.Item.RuntimeWindowHandle = live.RuntimeWindowHandle; match.Item.RuntimeProcessId = live.RuntimeProcessId; match.Item.CloseSupported = true; match.Item.WindowClassName = live.WindowClassName; matchedWindowHandles.Add(live.RuntimeWindowHandle);
             }
-            foreach (var window in windows.Where(window => !matchedWindowHandles.Contains(window.RuntimeWindowHandle))) { _draft.Add(window); _detected.Add(window.Id); }
-            var skippedTabs = 0; var matchedBrowserIds = new HashSet<Guid>(); var browserGroups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); foreach (var savedItem in _draft.Where(item => item.ItemType == ParcelItemType.BrowserTab)) { savedItem.BrowserSessionTabId = null; savedItem.BrowserSessionWindowId = null; savedItem.BrowserConnectionId = null; savedItem.CloseSupported = false; } foreach (var tab in browserTabs) { if (!BrowserTabRules.IsAllowedForCapture(tab)) { skippedTabs++; continue; } var saved = BrowserIntegrationService.FindSavedTab(_draft, tab, matchedBrowserIds, browserGroups); if (saved is not null) { matchedBrowserIds.Add(saved.Id); BrowserIntegrationService.ApplyLiveTab(saved, tab); continue; } var candidate = BrowserIntegrationService.FromTab(_editing?.Id ?? Guid.Empty, tab, _draft.Count, null); _draft.Add(candidate); _detectedBrowser.Add(candidate.Id); }
+            foreach (var window in windows.Where(window => !matchedWindowHandles.Contains(window.RuntimeWindowHandle))) { _draft.Add(window); _selected.Add(window.Id); _detected.Add(window.Id); }
+            var skippedTabs = 0; var matchedBrowserIds = new HashSet<Guid>(); var browserGroups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); foreach (var savedItem in _draft.Where(item => item.ItemType == ParcelItemType.BrowserTab)) { savedItem.BrowserSessionTabId = null; savedItem.BrowserSessionWindowId = null; savedItem.BrowserConnectionId = null; savedItem.CloseSupported = false; } foreach (var tab in browserTabs) { if (!BrowserTabRules.IsAllowedForCapture(tab)) { skippedTabs++; continue; } var saved = BrowserIntegrationService.FindSavedTab(_draft, tab, matchedBrowserIds, browserGroups); if (saved is not null) { matchedBrowserIds.Add(saved.Id); BrowserIntegrationService.ApplyLiveTab(saved, tab); continue; } var candidate = BrowserIntegrationService.FromTab(_editing?.Id ?? Guid.Empty, tab, _draft.Count, null); _draft.Add(candidate); _selected.Add(candidate.Id); _detectedBrowser.Add(candidate.Id); matchedBrowserIds.Add(candidate.Id); }
             _loadedItems = true; _workStatus.Text = $"{windows.Count} WINDOWS · {browserTabs.Count - skippedTabs} TABS"; RebuildItemSections();
         }
         catch (OperationCanceledException) { _workStatus.Text = "REFRESH CANCELED"; }
@@ -240,7 +240,7 @@ public sealed partial class CapturePage : PageBase
         finally { _busy = false; }
     }
 
-    private static string BrowserStatusText(BrowserConnectionInfo info) => info.Status switch { BrowserConnectionStatus.Connected => $"CONNECTED{(string.IsNullOrWhiteSpace(info.ExtensionVersion) ? string.Empty : $" v{info.ExtensionVersion}")} · {info.WindowCount} WINDOW{(info.WindowCount == 1 ? string.Empty : "S")} / {info.TabCount} TAB{(info.TabCount == 1 ? string.Empty : "S")}", BrowserConnectionStatus.NativeHostNotInstalled => "NATIVE HOST NOT INSTALLED", BrowserConnectionStatus.ExtensionNotDetected => "EXTENSION NOT DETECTED", BrowserConnectionStatus.VersionMismatch => "VERSION MISMATCH", BrowserConnectionStatus.ConnectionLost => "APP CONNECTION LOST", BrowserConnectionStatus.ConnectionError => "CONNECTION ERROR", BrowserConnectionStatus.BrowserNotFound => "BROWSER NOT FOUND", BrowserConnectionStatus.BrowserNotRunning => "BROWSER NOT RUNNING", BrowserConnectionStatus.Disabled => "DISABLED IN PRIVACY SETTINGS", _ => "CONNECTING" };
+    private static string BrowserStateText(BrowserConnectionStateInfo info) => info.State switch { BrowserConnectionState.Connected => $"CONNECTED · {info.Details.WindowCount} WINDOW{(info.Details.WindowCount == 1 ? string.Empty : "S")} / {info.Details.TabCount} TAB{(info.Details.TabCount == 1 ? string.Empty : "S")}", BrowserConnectionState.ConnectionFailed => "CONNECTION NEEDS ATTENTION", BrowserConnectionState.BrowserMissing => "BROWSER NOT FOUND", BrowserConnectionState.Disabled => "TAB CAPTURE OFF", BrowserConnectionState.ExtensionRequired => "SETUP IN PROGRESS", BrowserConnectionState.DesktopConnectionRequired => "SETUP IN PROGRESS", BrowserConnectionState.ReadyToTest => "READY TO TEST", _ => "NOT CONNECTED" };
 
     private async Task AddApplicationAsync() { var path = await _pickers.PickApplicationAsync(); if (path is null) return; try { AddDraft(_factory.Application(_editing?.Id ?? Guid.Empty, path, _draft.Count)); } catch (Exception e) { await ShowItemError(e); } }
     private async Task AddFolderAsync() { var path = await _pickers.PickFolderAsync(); if (path is null) return; try { AddDraft(_factory.Folder(_editing?.Id ?? Guid.Empty, path, _draft.Count)); } catch (Exception e) { await ShowItemError(e); } }
@@ -326,7 +326,7 @@ public sealed partial class CapturePage : PageBase
                 parcel = _editing;
                 var added = chosen.Count(item => !_original.Contains(item.Id));
                 var removed = _original.Count(id => !_selected.Contains(id));
-                await Store.ReplaceItemsAsync(parcel, chosen, $"Parcel updated - {added} added · {removed} removed", ParcelHistoryEventType.Updated, deskLayout: layout);
+                await Store.ReplaceItemsAsync(parcel, chosen, $"Parcel updated - {added} added · {removed} removed", ParcelHistoryEventType.Updated, deskLayout: layout, clearDeskLayout: _rememberLayout.IsChecked != true || layoutItems.Count == 0);
             }
             var changed = _editing is null ? chosen.Count : chosen.Count(item => !_original.Contains(item.Id));
             await Dialogs.ShowMessage(this, _editing is null ? "PARCEL PACKED" : "PARCEL UPDATED", _editing is null ? $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} SAVED" : $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} ADDED");
@@ -372,7 +372,7 @@ public sealed partial class CapturePage : PageBase
                 parcel = _editing;
                 var added = chosen.Count(item => !_original.Contains(item.Id));
                 var removed = _original.Count(id => !_selected.Contains(id));
-                await Store.ReplaceItemsAsync(parcel, chosen, $"Parcel updated - {added} added · {removed} removed", ParcelHistoryEventType.Updated, deskLayout: layout);
+                await Store.ReplaceItemsAsync(parcel, chosen, $"Parcel updated - {added} added · {removed} removed", ParcelHistoryEventType.Updated, deskLayout: layout, clearDeskLayout: _rememberLayout.IsChecked != true || layoutItems.Count == 0);
             }
             var changed = _editing is null ? chosen.Count : chosen.Count(item => !_original.Contains(item.Id));
             await Dialogs.ShowMessage(this, _editing is null ? "PARCEL PACKED" : "PARCEL UPDATED", _editing is null ? $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} SAVED" : $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} ADDED");

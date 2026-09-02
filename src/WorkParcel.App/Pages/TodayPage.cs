@@ -17,6 +17,12 @@ public sealed partial class TodayPage : PageBase
         var body = Body(14); body.Children.Add(Header("TODAY", "A lightweight list for what needs attention today.")); body.Children.Add(Ui.Row(_input, add, Ui.Spacer(), clear)); body.Children.Add(Ui.Rule()); body.Children.Add(_tasks); body.Children.Add(Ui.Rule()); body.Children.Add(Ui.SectionHeader("PARCELS USED TODAY", "Parcels marked open or packed today.")); body.Children.Add(ParcelsUsedToday()); SetContent(body); Refresh();
     }
 
+    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        Refresh();
+    }
+
     private async Task AddTaskAsync()
     {
         try { await Store.AddTodayTaskAsync(_input.Text); _input.Text = string.Empty; Refresh(); }

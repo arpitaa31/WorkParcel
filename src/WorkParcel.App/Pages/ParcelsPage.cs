@@ -37,6 +37,12 @@ public sealed partial class ParcelsPage : PageBase
         Refresh();
     }
 
+    protected override void OnNavigatedTo(Microsoft.UI.Xaml.Navigation.NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        Refresh();
+    }
+
     private async void QueueSearchRefresh()
     {
         var version = ++_searchVersion; await Task.Delay(180); if (version == _searchVersion) Refresh();

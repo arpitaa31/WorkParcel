@@ -14,6 +14,118 @@ public sealed class BrowserIntegrationCollection { }
 public sealed class BrowserIntegrationTests
 {
     [Fact]
+    public void BrowserConnectionStateMapsTechnicalFlagsToOneUserFacingNextStep()
+    {
+        var missing = Details(BrowserConnectionStatus.BrowserNotFound, installed: false);
+        Assert.Equal(BrowserConnectionState.BrowserMissing, BrowserConnectionStateLogic.Derive(missing));
+
+        var extensionRequired = Details(BrowserConnectionStatus.ExtensionNotDetected, hostInstalled: true);
+        Assert.Equal(BrowserConnectionState.ExtensionRequired, BrowserConnectionStateLogic.Derive(extensionRequired));
+
+        var extensionAndDesktopRequired = Details(BrowserConnectionStatus.NativeHostNotInstalled, hostInstalled: false);
+        Assert.Equal(BrowserConnectionState.ExtensionRequired, BrowserConnectionStateLogic.Derive(extensionAndDesktopRequired));
+
+        var desktopRequired = Details(BrowserConnectionStatus.NativeHostNotInstalled, hostInstalled: false, extensionDetected: true);
+        Assert.Equal(BrowserConnectionState.DesktopConnectionRequired, BrowserConnectionStateLogic.Derive(desktopRequired));
+
+        var notConfigured = Details(BrowserConnectionStatus.BrowserNotRunning, hostInstalled: false);
+        Assert.Equal(BrowserConnectionState.NotConfigured, BrowserConnectionStateLogic.Derive(notConfigured));
+
+        var ready = Details(BrowserConnectionStatus.Connecting, hostInstalled: true, extensionDetected: true);
+        Assert.Equal(BrowserConnectionState.ReadyToTest, BrowserConnectionStateLogic.Derive(ready));
+
+        var connected = Details(BrowserConnectionStatus.Connected, hostInstalled: true, extensionDetected: true);
+        Assert.Equal(BrowserConnectionState.Connected, BrowserConnectionStateLogic.Derive(connected));
+        Assert.Equal(BrowserConnectionState.Connected, BrowserConnectionStateLogic.Derive(Details(BrowserConnectionStatus.Connected, installed: false, hostInstalled: false, extensionDetected: true)));
+
+        var failed = Details(BrowserConnectionStatus.ConnectionError, hostInstalled: true, extensionDetected: true);
+        Assert.Equal(BrowserConnectionState.ConnectionFailed, BrowserConnectionStateLogic.Derive(failed));
+
+        var registeredButClosed = Details(BrowserConnectionStatus.BrowserNotRunning, hostInstalled: true);
+        Assert.Equal(BrowserConnectionState.ConnectionFailed, BrowserConnectionStateLogic.Derive(registeredButClosed));
+
+        var disabled = Details(BrowserConnectionStatus.Disabled, installed: false);
+        Assert.Equal(BrowserConnectionState.Disabled, BrowserConnectionStateLogic.Derive(disabled));
+
+        var intentionallyDisconnected = Details(BrowserConnectionStatus.Disconnected, hostInstalled: true, extensionDetected: true);
+        Assert.Equal(BrowserConnectionState.NotConfigured, BrowserConnectionStateLogic.Derive(intentionallyDisconnected));
+        Assert.Equal(BrowserConnectionState.BrowserMissing, BrowserConnectionStateLogic.Derive(Details(BrowserConnectionStatus.Disconnected, installed: false)));
+    }
+
+    [Fact]
+    public void BrowserPreferencesPersistTabClosingAndCapturePolicy()
+    {
+        using var temp = new TestDirectory();
+        var preferences = Path.Combine(temp.Path, "browser-preferences.json");
+        using (var first = new BrowserIntegrationService($"WorkParcel.Browser.Test.{Guid.NewGuid():N}", preferencesPath: preferences))
+        {
+            first.SetTabClosingEnabled(false);
+            first.SetEnabled(false);
+            Assert.False(first.TabClosingEnabled);
+            Assert.False(first.IsEnabled);
+        }
+
+        using var restarted = new BrowserIntegrationService($"WorkParcel.Browser.Test.{Guid.NewGuid():N}", preferencesPath: preferences);
+        Assert.False(restarted.TabClosingEnabled);
+        Assert.False(restarted.IsEnabled);
+    }
+
+    [Fact]
+    public void BrowserConnectionStatesExposeTheCorrectNextAction()
+    {
+        Assert.Null(BrowserConnectionStateLogic.PrimaryAction(BrowserConnectionState.BrowserMissing, "chrome"));
+        Assert.Equal("CONNECT CHROME", BrowserConnectionStateLogic.PrimaryAction(BrowserConnectionState.NotConfigured, "chrome"));
+        Assert.Equal("INSTALL EXTENSION", BrowserConnectionStateLogic.PrimaryAction(BrowserConnectionState.ExtensionRequired, "chrome"));
+        Assert.Equal("CONNECT TO WORKPARCEL", BrowserConnectionStateLogic.PrimaryAction(BrowserConnectionState.DesktopConnectionRequired, "chrome"));
+        Assert.Equal("TEST CONNECTION", BrowserConnectionStateLogic.PrimaryAction(BrowserConnectionState.ReadyToTest, "chrome"));
+        Assert.Equal("REFRESH TABS", BrowserConnectionStateLogic.PrimaryAction(BrowserConnectionState.Connected, "chrome"));
+        Assert.Equal("FIX CONNECTION", BrowserConnectionStateLogic.PrimaryAction(BrowserConnectionState.ConnectionFailed, "chrome"));
+        Assert.Equal("ENABLE BROWSER TABS", BrowserConnectionStateLogic.PrimaryAction(BrowserConnectionState.Disabled, "chrome"));
+    }
+
+    [Fact]
+    public void GuidedSetupStepFollowsFreshlyDetectedConnectionState()
+    {
+        Assert.Equal(BrowserSetupStep.InstallExtension, SetupStep(Details(BrowserConnectionStatus.ExtensionNotDetected, hostInstalled: true)));
+        Assert.Equal(BrowserSetupStep.ConnectDesktop, SetupStep(Details(BrowserConnectionStatus.NativeHostNotInstalled, hostInstalled: false, extensionDetected: true)));
+        Assert.Equal(BrowserSetupStep.TestConnection, SetupStep(Details(BrowserConnectionStatus.Connecting, hostInstalled: true, extensionDetected: true)));
+        Assert.Equal(BrowserSetupStep.TestConnection, SetupStep(Details(BrowserConnectionStatus.ConnectionError, hostInstalled: true, extensionDetected: true)));
+        Assert.Equal(BrowserSetupStep.Complete, SetupStep(Details(BrowserConnectionStatus.Connected, hostInstalled: true, extensionDetected: true)));
+        Assert.Equal(BrowserSetupStep.InstallExtension, SetupStep(Details(BrowserConnectionStatus.Disabled, installed: false)));
+        Assert.Equal(BrowserSetupStep.InstallExtension, SetupStep(Details(BrowserConnectionStatus.BrowserNotFound, installed: false)));
+    }
+
+    [Fact]
+    public void RemovingBrowserRegistrationReportsSuccessOnlyWhenTheRegistrationIsGone()
+    {
+        var exists = true;
+        Assert.True(HostRegistrationService.TryRemoveRegistration("test-registration", _ => exists = false, _ => exists));
+        Assert.False(exists);
+    }
+
+    [Fact]
+    public void RemovingBrowserRegistrationFailureIsTruthfulAndRetryable()
+    {
+        Assert.False(HostRegistrationService.TryRemoveRegistration("test-registration", _ => throw new IOException("locked"), _ => true));
+    }
+
+    [Fact]
+    public void BrowserPreferenceChangesNotifySettingsImmediately()
+    {
+        using var temp = new TestDirectory();
+        using var service = new BrowserIntegrationService($"WorkParcel.Browser.Test.{Guid.NewGuid():N}", preferencesPath: Path.Combine(temp.Path, "preferences.json"));
+        var notifications = 0;
+        service.StateChanged += (_, _) => notifications++;
+
+        service.SetTabClosingEnabled(false);
+        service.SetEnabled(false);
+
+        Assert.Equal(2, notifications);
+        Assert.False(service.TabClosingEnabled);
+        Assert.False(service.IsEnabled);
+    }
+
+    [Fact]
     public void ProtocolRejectsMissingOrOverlongMessageType()
     {
         var missing = Encoding.UTF8.GetBytes("{\"version\":1,\"requestId\":\"request\",\"type\":null,\"timestampUtc\":\"2026-01-01T00:00:00Z\",\"payload\":{}}");
@@ -42,6 +154,33 @@ public sealed class BrowserIntegrationTests
         var duplicateOne = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.BrowserTab, BrowserFamily = "chrome", BrowserWindowGroupId = "a", Value = "https://ambiguous.example/" };
         var duplicateTwo = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.BrowserTab, BrowserFamily = "chrome", BrowserWindowGroupId = "b", Value = "https://ambiguous.example/" };
         Assert.Null(BrowserIntegrationService.FindSavedTab(new[] { duplicateOne, duplicateTwo }, new BrowserTabData { Browser = "chrome", WindowGroupKey = "new-window", Url = "https://ambiguous.example/", CanRestore = true }, new HashSet<Guid>(), new Dictionary<string, string>()));
+    }
+
+    [Fact]
+    public void BrowserTabMatchingScopesWindowAssignmentsByBrowserConnection()
+    {
+        var chrome = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.BrowserTab, BrowserFamily = "chrome", BrowserWindowGroupId = "chrome-saved", Value = "https://same.example/", BrowserWindowLeft = 0, BrowserWindowWidth = 1000 };
+        var edge = new ParcelItem { Id = Guid.NewGuid(), ItemType = ParcelItemType.BrowserTab, BrowserFamily = "edge", BrowserWindowGroupId = "edge-saved", Value = "https://same.example/", BrowserWindowLeft = 100, BrowserWindowWidth = 1000 };
+        var matched = new HashSet<Guid>();
+        var groups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var selectedChrome = BrowserIntegrationService.FindSavedTab(new[] { chrome, edge }, new BrowserTabData { Browser = "chrome", ConnectionId = "chrome-connection", WindowGroupKey = "window-0", Url = chrome.Value, WindowLeft = 0, WindowWidth = 1000, CanRestore = true }, matched, groups);
+        Assert.Same(chrome, selectedChrome);
+        matched.Add(chrome.Id);
+
+        var selectedEdge = BrowserIntegrationService.FindSavedTab(new[] { chrome, edge }, new BrowserTabData { Browser = "edge", ConnectionId = "edge-connection", WindowGroupKey = "window-0", Url = edge.Value, WindowLeft = 100, WindowWidth = 1000, CanRestore = true }, matched, groups);
+        Assert.Same(edge, selectedEdge);
+    }
+
+    [Fact]
+    public void NewlyDetectedDuplicateTabsRemainSeparateWhenTheirStableIdsAreMarkedMatched()
+    {
+        var first = new BrowserTabData { Browser = "chrome", ConnectionId = "connection", WindowGroupKey = "window-0", Url = "https://same.example/", TabIndex = 0, CanRestore = true };
+        var second = first with { WindowGroupKey = "window-1", TabIndex = 1 };
+        var detected = BrowserIntegrationService.FromTab(Guid.NewGuid(), first, 0, null);
+        var matched = new HashSet<Guid> { detected.Id };
+
+        Assert.Null(BrowserIntegrationService.FindSavedTab(new[] { detected }, second, matched, new Dictionary<string, string>()));
     }
 
     [Fact]
@@ -88,6 +227,101 @@ public sealed class BrowserIntegrationTests
         Assert.Equal("https://edge.example/", edgeTab.Url);
         Assert.Equal(chromeStatus.ConnectionId, chromeTab.ConnectionId);
         Assert.Equal(edgeStatus.ConnectionId, edgeTab.ConnectionId);
+    }
+
+    [Fact]
+    public async Task DisconnectStopsOnlyTheSelectedBrowserConnection()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var pipeName = $"WorkParcel.Browser.Test.{Guid.NewGuid():N}";
+        using var service = new BrowserIntegrationService(pipeName);
+        service.Start();
+        await using var chrome = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await using var edge = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await Task.WhenAll(chrome.ConnectAsync(5000), edge.ConnectAsync(5000));
+
+        await SendAsync(chrome, BrowserProtocol.Create("hello", "chrome-hello", "chrome", new { browser = "chrome" }, extensionVersion: BrowserIntegrationService.ExpectedExtensionVersion));
+        await SendAsync(edge, BrowserProtocol.Create("hello", "edge-hello", "edge", new { browser = "edge" }, extensionVersion: BrowserIntegrationService.ExpectedExtensionVersion));
+        await ReceiveAsync(chrome);
+        await ReceiveAsync(edge);
+
+        service.Disconnect("chrome");
+        var immediate = service.GetConnectionState("chrome");
+        Assert.Equal(BrowserConnectionStatus.Disconnected, immediate.Details.Status);
+        Assert.Equal(BrowserConnectionState.NotConfigured, immediate.State);
+        for (var attempt = 0; attempt < 20 && service.Connections.Any(connection => connection.Browser == "chrome"); attempt++) await Task.Delay(25);
+
+        Assert.DoesNotContain(service.Connections, connection => connection.Browser == "chrome");
+        Assert.Contains(service.Connections, connection => connection.Browser == "edge");
+    }
+
+    [Fact]
+    public async Task IntentionalDisconnectIsShownAsNotConnectedInsteadOfAConnectionFailure()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var pipeName = $"WorkParcel.Browser.Test.{Guid.NewGuid():N}";
+        using var service = new BrowserIntegrationService(pipeName);
+        service.Start();
+        await using var chrome = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await chrome.ConnectAsync(5000);
+        await SendAsync(chrome, BrowserProtocol.Create("hello", "chrome-hello", "chrome", new { browser = "chrome" }, extensionVersion: BrowserIntegrationService.ExpectedExtensionVersion));
+        await ReceiveAsync(chrome);
+
+        service.Disconnect("chrome");
+        for (var attempt = 0; attempt < 20 && service.Connections.Any(connection => connection.Browser == "chrome"); attempt++) await Task.Delay(25);
+
+        var state = service.GetConnectionState("chrome");
+        Assert.Equal(BrowserConnectionStatus.Disconnected, state.Details.Status);
+        Assert.Equal(BrowserConnectionState.NotConfigured, state.State);
+    }
+
+    [Fact]
+    public async Task RepairSucceedsAfterACompatibleHandshakeFollowsAFailedConnection()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var pipeName = $"WorkParcel.Browser.Test.{Guid.NewGuid():N}";
+        using var service = new BrowserIntegrationService(pipeName);
+        service.Start();
+        await using (var failed = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous))
+        {
+            await failed.ConnectAsync(5000);
+            await SendAsync(failed, BrowserProtocol.Create("hello", "failed-hello", "chrome", new { browser = "chrome" }, extensionVersion: "0.0.1"));
+            var response = await ReceiveAsync(failed);
+            Assert.Equal("VERSION_MISMATCH", response.Payload.GetProperty("status").GetString());
+            Assert.Equal(BrowserConnectionState.ConnectionFailed, service.GetConnectionState("chrome").State);
+        }
+
+        await using var repaired = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await repaired.ConnectAsync(5000);
+        await SendAsync(repaired, BrowserProtocol.Create("hello", "repaired-hello", "chrome", new { browser = "chrome" }, extensionVersion: BrowserIntegrationService.ExpectedExtensionVersion));
+        var repairedResponse = await ReceiveAsync(repaired);
+
+        Assert.Equal("CONNECTED", repairedResponse.Payload.GetProperty("status").GetString());
+        Assert.Equal(BrowserConnectionStatus.Connected, service.GetStatus("chrome").Status);
+        Assert.Equal(BrowserConnectionState.Connected, service.GetConnectionState("chrome").State);
+    }
+
+    [Fact]
+    public async Task FailedRepairRemainsRetryableAndNeverClaimsAConnection()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var pipeName = $"WorkParcel.Browser.Test.{Guid.NewGuid():N}";
+        using var service = new BrowserIntegrationService(pipeName);
+        service.Start();
+        await using var retry = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await retry.ConnectAsync(5000);
+        await SendAsync(retry, BrowserProtocol.Create("hello", "retry-hello", "chrome", new { browser = "chrome" }, extensionVersion: "0.0.1"));
+        var response = await ReceiveAsync(retry);
+
+        Assert.Equal("VERSION_MISMATCH", response.Payload.GetProperty("status").GetString());
+        var state = service.GetConnectionState("chrome");
+        Assert.Equal(BrowserConnectionStatus.VersionMismatch, state.Details.Status);
+        Assert.Equal(BrowserConnectionState.ConnectionFailed, state.State);
+        Assert.Equal("FIX CONNECTION", BrowserConnectionStateLogic.PrimaryAction(state.State, "chrome"));
     }
 
     [Fact]
@@ -368,5 +602,18 @@ public sealed class BrowserIntegrationTests
         var body = await BrowserProtocol.ReadFrameAsync(stream).WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(BrowserProtocol.TryDeserialize(body, out var message, out var error), error);
         return message!;
+    }
+
+    private static BrowserConnectionInfo Details(BrowserConnectionStatus status, bool installed = true, bool hostInstalled = false, bool extensionDetected = false) => new(
+        "chrome", status, extensionDetected ? BrowserIntegrationService.ExpectedExtensionVersion : null, null, 0, null,
+        BrowserInstalled: installed, HostInstalled: hostInstalled, ExtensionDetected: extensionDetected);
+
+    private static BrowserSetupStep SetupStep(BrowserConnectionInfo info) => BrowserSetupStepLogic.For(new BrowserConnectionStateInfo(info, BrowserConnectionStateLogic.Derive(info)));
+
+    private sealed class TestDirectory : IDisposable
+    {
+        public TestDirectory() { Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "WorkParcelBrowserTests", Guid.NewGuid().ToString("N")); Directory.CreateDirectory(Path); }
+        public string Path { get; }
+        public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
     }
 }

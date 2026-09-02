@@ -53,6 +53,7 @@ public sealed class DeskMemoryService
         CancellationToken cancellationToken = default)
     {
         options ??= new DeskRestoreOptions();
+        _lastUndo = null;
         if (!layout.IsEnabled)
         {
             return new DeskRestoreResult
@@ -164,7 +165,10 @@ public sealed class DeskMemoryService
             appliedPlacements.Add((live.Handle, placement));
         }
         if (options.EnableUndo && undo.Count > 0)
-            _lastUndo = new DeskUndoOperation { Windows = undo, CreatedAtUtc = DateTime.UtcNow };
+        {
+            var lifetime = options.UndoLifetime is { } requested && requested > TimeSpan.Zero ? requested : DefaultUndoLifetime;
+            _lastUndo = new DeskUndoOperation { Windows = undo, CreatedAtUtc = DateTime.UtcNow, Lifetime = lifetime };
+        }
 
         // Windows can recalculate a frame, snap zone, or DPI after the first
         // SetWindowPos call. A bounded verification pass reapplies the same
@@ -202,7 +206,7 @@ public sealed class DeskMemoryService
         var undo = _lastUndo;
         _lastUndo = null;
         if (undo is null) return new DeskRestoreResult { Items = Array.Empty<DeskRestoreItemResult>(), Topology = DeskTopologyComparison.Exact };
-        if (undo.IsExpired(DefaultUndoLifetime))
+        if (undo.IsExpired())
             return new DeskRestoreResult { Items = undo.Windows.Select(window => new DeskRestoreItemResult(Guid.Empty, null, DeskRestoreResultKind.TimedOut, "Undo expired before it was used.", window.Handle)).ToList(), Topology = DeskTopologyComparison.Exact };
 
         var current = _provider.GetSnapshot();

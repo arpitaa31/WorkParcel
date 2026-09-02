@@ -164,37 +164,55 @@ WorkingDirectory=$working, WindowTitle=$windowTitle, WindowClassName=$windowClas
         await transaction.CommitAsync(cancellationToken);
     }
 
-    public async Task DeleteItemWithHistoryAsync(Guid itemId, ParcelHistoryEntry history, CancellationToken cancellationToken = default)
+    public async Task<bool> DeleteItemWithHistoryAsync(Guid itemId, ParcelHistoryEntry history, CancellationToken cancellationToken = default)
     {
         await using var connection = await _factory.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
+        var deleted = 0;
         await using (var command = connection.CreateCommand())
         {
             command.Transaction = transaction;
             command.CommandText = "DELETE FROM ParcelItems WHERE Id=$id AND ParcelId=$parcel;";
             command.Parameters.AddWithValue("$id", itemId.ToString()); command.Parameters.AddWithValue("$parcel", history.ParcelId.ToString());
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            deleted = await command.ExecuteNonQueryAsync(cancellationToken);
         }
+
+        // Do not write history or commit when SQLite did not delete the requested
+        // row. The affected-row count is the repository's source of truth.
+        if (deleted != 1) return false;
+
+        await RemoveDeskWindowReferencesAsync(connection, transaction, history.ParcelId, itemId, cancellationToken);
         await InsertHistoryAsync(connection, transaction, history, cancellationToken);
         await TouchParcelAsync(connection, transaction, history.ParcelId, history.Timestamp, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        // Once the delete and its history are prepared, finish the commit as a
+        // unit. A cancellation request must not turn a committed delete into a
+        // false failure at the UI boundary.
+        await transaction.CommitAsync(CancellationToken.None);
+        return true;
     }
 
-    public async Task DeleteItemsWithHistoryAsync(Guid parcelId, IReadOnlyList<Guid> itemIds, ParcelHistoryEntry history, CancellationToken cancellationToken = default)
+    public async Task<int> DeleteItemsWithHistoryAsync(Guid parcelId, IReadOnlyList<Guid> itemIds, ParcelHistoryEntry history, CancellationToken cancellationToken = default)
     {
-        if (itemIds.Count == 0) return;
+        var distinctIds = itemIds.Distinct().ToList();
+        if (distinctIds.Count == 0) return 0;
+
         await using var connection = await _factory.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
-        foreach (var itemId in itemIds)
+        var deleted = 0;
+        foreach (var itemId in distinctIds)
         {
-            await using var command = connection.CreateCommand(); command.Transaction = transaction; command.CommandText = "DELETE FROM ParcelItems WHERE Id=$id AND ParcelId=$parcel;"; command.Parameters.AddWithValue("$id", itemId.ToString()); command.Parameters.AddWithValue("$parcel", parcelId.ToString()); await command.ExecuteNonQueryAsync(cancellationToken);
+            await using var command = connection.CreateCommand(); command.Transaction = transaction; command.CommandText = "DELETE FROM ParcelItems WHERE Id=$id AND ParcelId=$parcel;"; command.Parameters.AddWithValue("$id", itemId.ToString()); command.Parameters.AddWithValue("$parcel", parcelId.ToString());
+            if (await command.ExecuteNonQueryAsync(cancellationToken) != 1) return 0;
+            await RemoveDeskWindowReferencesAsync(connection, transaction, parcelId, itemId, cancellationToken);
+            deleted++;
         }
         await InsertHistoryAsync(connection, transaction, history, cancellationToken);
         await TouchParcelAsync(connection, transaction, parcelId, history.Timestamp, cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        await transaction.CommitAsync(CancellationToken.None);
+        return deleted;
     }
 
-    public async Task ReplaceItemsWithHistoryAsync(Parcel parcel, IReadOnlyList<ParcelItem> items, ParcelHistoryEntry history, CancellationToken cancellationToken = default, DeskLayoutSnapshot? layout = null)
+    public async Task ReplaceItemsWithHistoryAsync(Parcel parcel, IReadOnlyList<ParcelItem> items, ParcelHistoryEntry history, CancellationToken cancellationToken = default, DeskLayoutSnapshot? layout = null, bool clearDeskLayout = false)
     {
         await using var connection = await _factory.OpenAsync(cancellationToken);
         await using var transaction = connection.BeginTransaction();
@@ -204,10 +222,10 @@ WorkingDirectory=$working, WindowTitle=$windowTitle, WindowClassName=$windowClas
             await delete.ExecuteNonQueryAsync(cancellationToken);
         }
         foreach (var item in items) await InsertItemAsync(connection, transaction, item, cancellationToken);
-        if (layout is not null)
+        if (layout is not null || clearDeskLayout)
         {
             await DeleteCurrentDeskLayoutAsync(connection, transaction, parcel.Id, cancellationToken);
-            await InsertDeskLayoutAsync(connection, transaction, layout, cancellationToken);
+            if (layout is not null) await InsertDeskLayoutAsync(connection, transaction, layout, cancellationToken);
         }
         await using (var update = connection.CreateCommand())
         {
@@ -244,6 +262,36 @@ WorkingDirectory=$working, WindowTitle=$windowTitle, WindowClassName=$windowClas
             await TouchParcelAsync(connection, transaction, parcelId, history.Timestamp, cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task RemoveDeskWindowReferencesAsync(SqliteConnection connection, SqliteTransaction transaction, Guid parcelId, Guid itemId, CancellationToken cancellationToken)
+    {
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = transaction;
+            delete.CommandText = "DELETE FROM DeskWindowLayouts WHERE ParcelId=$parcel AND ParcelItemId=$item;";
+            delete.Parameters.AddWithValue("$parcel", parcelId.ToString());
+            delete.Parameters.AddWithValue("$item", itemId.ToString());
+            await delete.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        // Older Desk Memory rows may have no item identity. Keep those rows
+        // while another stable-ID-linked window still anchors the layout, but
+        // remove them once this deletion leaves the parcel with no linked
+        // windows so they cannot resurrect an orphaned snapshot on restart.
+        await using (var removeOrphans = connection.CreateCommand())
+        {
+            removeOrphans.Transaction = transaction;
+            removeOrphans.CommandText = "DELETE FROM DeskWindowLayouts WHERE ParcelId=$parcel AND ParcelItemId IS NULL AND NOT EXISTS (SELECT 1 FROM DeskWindowLayouts WHERE ParcelId=$parcel AND ParcelItemId IS NOT NULL);";
+            removeOrphans.Parameters.AddWithValue("$parcel", parcelId.ToString());
+            await removeOrphans.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var removeEmpty = connection.CreateCommand();
+        removeEmpty.Transaction = transaction;
+        removeEmpty.CommandText = "DELETE FROM DeskLayoutSnapshots WHERE ParcelId=$parcel AND IsCurrent=1 AND NOT EXISTS (SELECT 1 FROM DeskWindowLayouts WHERE LayoutSnapshotId=DeskLayoutSnapshots.Id);";
+        removeEmpty.Parameters.AddWithValue("$parcel", parcelId.ToString());
+        await removeEmpty.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task InsertHistoryOnlyAsync(ParcelHistoryEntry history, CancellationToken cancellationToken = default)
@@ -437,7 +485,7 @@ VALUES($id,$name,$description,$state,$created,$updated,$lastOpened,$lastPacked,$
         var layouts = new Dictionary<Guid, DeskLayoutSnapshot>();
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText = "SELECT Id, ParcelId, Name, CreatedAt, UpdatedAt, IsCurrent, IsEnabled, TopologySignature FROM DeskLayoutSnapshots WHERE IsCurrent = 1;";
+            command.CommandText = "SELECT Id, ParcelId, Name, CreatedAt, UpdatedAt, IsCurrent, IsEnabled, TopologySignature FROM DeskLayoutSnapshots WHERE IsCurrent = 1 AND EXISTS (SELECT 1 FROM DeskWindowLayouts windowLayout INNER JOIN ParcelItems item ON item.Id = windowLayout.ParcelItemId AND item.ParcelId = windowLayout.ParcelId WHERE windowLayout.LayoutSnapshotId = DeskLayoutSnapshots.Id);";
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -489,7 +537,7 @@ VALUES($id,$name,$description,$state,$created,$updated,$lastOpened,$lastPacked,$
 
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText = "SELECT * FROM DeskWindowLayouts WHERE LayoutSnapshotId IN (SELECT Id FROM DeskLayoutSnapshots WHERE IsCurrent = 1) ORDER BY LayoutSnapshotId, ZOrderRank, CreatedAt;";
+            command.CommandText = "SELECT * FROM DeskWindowLayouts WHERE ParcelItemId IS NOT NULL AND LayoutSnapshotId IN (SELECT Id FROM DeskLayoutSnapshots WHERE IsCurrent = 1) ORDER BY LayoutSnapshotId, ZOrderRank, CreatedAt;";
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
