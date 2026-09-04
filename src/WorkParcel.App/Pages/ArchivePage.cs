@@ -30,9 +30,8 @@ public sealed partial class ArchivePage : PageBase
         {
             var restore = Ui.Button("RESTORE", true); restore.Click += async (_, _) => { try { await Store.RestoreAsync(parcel); Refresh(); } catch (Exception exception) { Services.AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "RESTORE FAILED", "The parcel was not changed."); } };
             var remove = Ui.Button("DELETE"); remove.Click += async (_, _) => { if (await Dialogs.ConfirmPermanentDelete(this, parcel)) { try { await Store.DeleteAsync(parcel); Refresh(); } catch (Exception exception) { Services.AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "DELETE FAILED", "The saved record was not removed."); } } };
-            var copy = Ui.Stack(3); copy.Children.Add(Ui.Text(parcel.Name, 13, true)); copy.Children.Add(Ui.Text(string.IsNullOrWhiteSpace(parcel.Description) ? "No description" : parcel.Description, 11, false, "#8D9CA2")); copy.Children.Add(Ui.Mono(parcel.ItemSummary, 10, "#8D9CA2"));
-            var row = new Border { Child = Ui.Row(copy, Ui.Spacer(), Ui.Tag("ARCHIVED", "#F0B45B"), restore, remove), Padding = new Thickness(9, 7, 8, 7), BorderBrush = Ui.Resource("BorderBrush"), BorderThickness = new Thickness(0, 0, 0, 1) };
-            row.DoubleTapped += (_, _) => NavigateDetails(parcel); Ui.Interactive(row); _rows.Children.Add(row);
+            var copy = Ui.Stack(3); copy.Children.Add(Ui.Text(parcel.Name, 13, true)); copy.Children.Add(Ui.Text(string.IsNullOrWhiteSpace(parcel.Description) ? "No description" : parcel.Description, 11, false, "#8D9CA2"));
+            _rows.Children.Add(new Border { Child = Ui.Row(copy, Ui.Spacer(), Ui.Tag("ARCHIVED", "#F0B45B"), restore, remove), Padding = new Thickness(9, 7, 8, 7), BorderBrush = Ui.Resource("BorderBrush"), BorderThickness = new Thickness(0, 0, 0, 1) });
         }
     }
 }

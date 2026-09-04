@@ -345,111 +345,14 @@ DROP TABLE ParcelItems_V3;";
 
     private static async Task MigrateToV6Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
     {
-        const string sql = @"
+        await ExecuteAsync(connection, transaction, @"
 DROP INDEX IF EXISTS UX_ParcelItems_Identity;
-CREATE UNIQUE INDEX IF NOT EXISTS UX_ParcelItems_Identity ON ParcelItems(ParcelId, ItemType, NormalizedIdentity) WHERE NormalizedIdentity IS NOT NULL AND ItemType <> 'ApplicationWindow';
-CREATE TABLE IF NOT EXISTS DeskLayoutSnapshots (
-    Id TEXT PRIMARY KEY,
-    ParcelId TEXT NOT NULL,
-    Name TEXT NOT NULL DEFAULT 'Desk Memory',
-    CreatedAt TEXT NOT NULL,
-    UpdatedAt TEXT NOT NULL,
-    IsCurrent INTEGER NOT NULL DEFAULT 1 CHECK(IsCurrent IN (0,1)),
-    IsEnabled INTEGER NOT NULL DEFAULT 1 CHECK(IsEnabled IN (0,1)),
-    TopologySignature TEXT NOT NULL DEFAULT '',
-    FOREIGN KEY(ParcelId) REFERENCES Parcels(Id) ON DELETE CASCADE
-);
-CREATE UNIQUE INDEX IF NOT EXISTS UX_DeskLayoutSnapshots_Current ON DeskLayoutSnapshots(ParcelId) WHERE IsCurrent = 1;
-CREATE INDEX IF NOT EXISTS IX_DeskLayoutSnapshots_Parcel_Updated ON DeskLayoutSnapshots(ParcelId, UpdatedAt DESC);
-
-CREATE TABLE IF NOT EXISTS DeskMonitors (
-    Id TEXT PRIMARY KEY,
-    LayoutSnapshotId TEXT NOT NULL,
-    ParcelId TEXT NOT NULL,
-    DeviceIdentifier TEXT NOT NULL,
-    FriendlyName TEXT NOT NULL DEFAULT '',
-    IsPrimary INTEGER NOT NULL DEFAULT 0 CHECK(IsPrimary IN (0,1)),
-    BoundsLeft INTEGER NOT NULL,
-    BoundsTop INTEGER NOT NULL,
-    BoundsWidth INTEGER NOT NULL,
-    BoundsHeight INTEGER NOT NULL,
-    WorkLeft INTEGER NOT NULL,
-    WorkTop INTEGER NOT NULL,
-    WorkWidth INTEGER NOT NULL,
-    WorkHeight INTEGER NOT NULL,
-    RelativeArrangement TEXT NOT NULL DEFAULT '',
-    DpiX INTEGER NOT NULL DEFAULT 96,
-    DpiY INTEGER NOT NULL DEFAULT 96,
-    Orientation INTEGER NOT NULL DEFAULT 0,
-    CaptureOrder INTEGER NOT NULL DEFAULT 0,
-    CreatedAt TEXT NOT NULL,
-    FOREIGN KEY(LayoutSnapshotId) REFERENCES DeskLayoutSnapshots(Id) ON DELETE CASCADE,
-    FOREIGN KEY(ParcelId) REFERENCES Parcels(Id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS IX_DeskMonitors_Snapshot_Order ON DeskMonitors(LayoutSnapshotId, CaptureOrder);
-
-CREATE TABLE IF NOT EXISTS DeskWindowLayouts (
-    Id TEXT PRIMARY KEY,
-    LayoutSnapshotId TEXT NOT NULL,
-    ParcelId TEXT NOT NULL,
-    ParcelItemId TEXT NULL,
-    ExecutableIdentity TEXT NOT NULL DEFAULT '',
-    ApplicationIdentifier TEXT NULL,
-    ProcessName TEXT NOT NULL DEFAULT '',
-    CapturedTitle TEXT NOT NULL DEFAULT '',
-    NormalizedTitle TEXT NOT NULL DEFAULT '',
-    WindowClassName TEXT NULL,
-    SavedMonitorId TEXT NULL,
-    AbsoluteLeft INTEGER NOT NULL,
-    AbsoluteTop INTEGER NOT NULL,
-    AbsoluteWidth INTEGER NOT NULL,
-    AbsoluteHeight INTEGER NOT NULL,
-    NormalLeft INTEGER NOT NULL,
-    NormalTop INTEGER NOT NULL,
-    NormalWidth INTEGER NOT NULL,
-    NormalHeight INTEGER NOT NULL,
-    RelativeLeft REAL NOT NULL DEFAULT 0,
-    RelativeTop REAL NOT NULL DEFAULT 0,
-    RelativeWidth REAL NOT NULL DEFAULT 0,
-    RelativeHeight REAL NOT NULL DEFAULT 0,
-    WindowState TEXT NOT NULL DEFAULT 'Normal',
-    ZOrderRank INTEGER NOT NULL DEFAULT 0,
-    SourceDpiX INTEGER NOT NULL DEFAULT 96,
-    SourceDpiY INTEGER NOT NULL DEFAULT 96,
-    IsEnabled INTEGER NOT NULL DEFAULT 1 CHECK(IsEnabled IN (0,1)),
-    IsSupported INTEGER NOT NULL DEFAULT 1 CHECK(IsSupported IN (0,1)),
-    MatchMetadata TEXT NULL,
-    LastMatchConfidence TEXT NOT NULL DEFAULT 'NoMatch',
-    CreatedAt TEXT NOT NULL,
-    UpdatedAt TEXT NOT NULL,
-    FOREIGN KEY(LayoutSnapshotId) REFERENCES DeskLayoutSnapshots(Id) ON DELETE CASCADE,
-    FOREIGN KEY(ParcelId) REFERENCES Parcels(Id) ON DELETE CASCADE,
-    FOREIGN KEY(ParcelItemId) REFERENCES ParcelItems(Id) ON DELETE SET NULL,
-    FOREIGN KEY(SavedMonitorId) REFERENCES DeskMonitors(Id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS IX_DeskWindowLayouts_Snapshot_Order ON DeskWindowLayouts(LayoutSnapshotId, ZOrderRank, CreatedAt);
-CREATE INDEX IF NOT EXISTS IX_DeskWindowLayouts_Parcel_Item ON DeskWindowLayouts(ParcelId, ParcelItemId);
-";
-        await ExecuteAsync(connection, transaction, sql, cancellationToken);
+CREATE UNIQUE INDEX IF NOT EXISTS UX_ParcelItems_Identity ON ParcelItems(ParcelId, ItemType, NormalizedIdentity) WHERE NormalizedIdentity IS NOT NULL AND ItemType <> 'ApplicationWindow';", cancellationToken);
     }
 
     private static async Task MigrateToV7Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
     {
-        var columns = await ReadColumnsAsync(connection, transaction, "ParcelItems", cancellationToken);
-        var additions = new[]
-        {
-            (Name: "BrowserWindowLeft", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowLeft INTEGER NULL;"),
-            (Name: "BrowserWindowTop", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowTop INTEGER NULL;"),
-            (Name: "BrowserWindowWidth", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowWidth INTEGER NULL;"),
-            (Name: "BrowserWindowHeight", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowHeight INTEGER NULL;"),
-            (Name: "BrowserWindowState", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowState TEXT NULL;"),
-            (Name: "BrowserWindowFocused", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowFocused INTEGER NOT NULL DEFAULT 0 CHECK(BrowserWindowFocused IN (0,1));"),
-            (Name: "BrowserWindowDpiX", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowDpiX INTEGER NULL;"),
-            (Name: "BrowserWindowDpiY", Sql: "ALTER TABLE ParcelItems ADD COLUMN BrowserWindowDpiY INTEGER NULL;")
-        };
-        foreach (var addition in additions)
-            if (!columns.Contains(addition.Name, StringComparer.OrdinalIgnoreCase))
-                await ExecuteAsync(connection, transaction, addition.Sql, cancellationToken);
+        await Task.CompletedTask;
     }
 
     private static async Task MigrateToV8Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
@@ -461,17 +364,7 @@ CREATE INDEX IF NOT EXISTS IX_DeskWindowLayouts_Parcel_Item ON DeskWindowLayouts
 
     private static async Task MigrateToV9Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
     {
-        var columns = await ReadColumnsAsync(connection, transaction, "DeskWindowLayouts", cancellationToken);
-        var additions = new[]
-        {
-            (Name: "MonitorDpiX", Sql: "ALTER TABLE DeskWindowLayouts ADD COLUMN MonitorDpiX INTEGER NOT NULL DEFAULT 96;"),
-            (Name: "MonitorDpiY", Sql: "ALTER TABLE DeskWindowLayouts ADD COLUMN MonitorDpiY INTEGER NOT NULL DEFAULT 96;"),
-            (Name: "IsTopmost", Sql: "ALTER TABLE DeskWindowLayouts ADD COLUMN IsTopmost INTEGER NOT NULL DEFAULT 0 CHECK(IsTopmost IN (0,1));"),
-            (Name: "CoordinatesArePhysicalPixels", Sql: "ALTER TABLE DeskWindowLayouts ADD COLUMN CoordinatesArePhysicalPixels INTEGER NOT NULL DEFAULT 1 CHECK(CoordinatesArePhysicalPixels IN (0,1));")
-        };
-        foreach (var addition in additions)
-            if (!columns.Contains(addition.Name, StringComparer.OrdinalIgnoreCase))
-                await ExecuteAsync(connection, transaction, addition.Sql, cancellationToken);
+        await Task.CompletedTask;
     }
 
     private static async Task<HashSet<string>> ReadColumnsAsync(SqliteConnection connection, SqliteTransaction transaction, string table, CancellationToken cancellationToken)

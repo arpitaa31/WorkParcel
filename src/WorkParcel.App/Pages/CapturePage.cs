@@ -13,7 +13,6 @@ public sealed record CaptureSeed(string Name, string Description, Guid? Existing
 public sealed partial class CapturePage : PageBase
 {
     private readonly OpenWindowService _windows = new();
-    private readonly DeskMemoryService _desk = new();
     private readonly WorkspacePickerService _pickers = new();
     private readonly ParcelItemFactory _factory = new();
     private readonly List<ParcelItem> _draft = new();
@@ -22,12 +21,11 @@ public sealed partial class CapturePage : PageBase
     private readonly HashSet<Guid> _detected = new();
     private readonly HashSet<Guid> _detectedBrowser = new();
     private readonly TextBox _name = new() { Header = "PARCEL NAME", PlaceholderText = "What should this setup be called?", MaxLength = 80 };
-    private readonly TextBox _description = new() { Header = "DESCRIPTION — OPTIONAL", PlaceholderText = "What is this setup for?", MaxLength = 240, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 70 };
+    private readonly TextBox _description = new() { Header = "DESCRIPTION - OPTIONAL", PlaceholderText = "What is this setup for?", MaxLength = 240, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 70 };
     private readonly TextBox _search = new() { PlaceholderText = "Search selected and detected items" };
     private readonly TextBlock _selectionStatus = Ui.Mono("0 SELECTED", 10, "#9BE28F", true);
     private readonly TextBlock _workStatus = Ui.Mono("READY", 10);
     private readonly StackPanel _itemHost = Ui.Stack(9);
-    private readonly CheckBox _rememberLayout = new() { Content = Ui.Mono("REMEMBER WINDOW LAYOUT", 11, null, true), IsChecked = true, UseSystemFocusVisuals = true };
     private CaptureSeed? _seed;
     private Parcel? _editing;
     private CancellationTokenSource? _loadCancellation;
@@ -35,7 +33,6 @@ public sealed partial class CapturePage : PageBase
     private bool _loadedItems;
     private bool _busy;
     private int _searchVersion;
-    private DeskLayoutCaptureResult? _layoutPreview;
 
     public CapturePage()
     {
@@ -49,7 +46,7 @@ public sealed partial class CapturePage : PageBase
     {
         BrowserIntegrationService.Current.StateChanged -= BrowserIntegration_StateChanged;
         BrowserIntegrationService.Current.StateChanged += BrowserIntegration_StateChanged;
-        _draft.Clear(); _selected.Clear(); _original.Clear(); _detected.Clear(); _detectedBrowser.Clear(); _loadedItems = false; _step = 1; _busy = false; _layoutPreview = null; _rememberLayout.IsChecked = true;
+        _draft.Clear(); _selected.Clear(); _original.Clear(); _detected.Clear(); _detectedBrowser.Clear(); _loadedItems = false; _step = 1; _busy = false;
         _seed = e.Parameter as CaptureSeed;
         _editing = _seed?.ExistingParcelId is Guid id ? Store.Parcels.Concat(Store.Archived).FirstOrDefault(parcel => parcel.Id == id) : null;
         _name.Text = _editing?.Name ?? _seed?.Name ?? string.Empty; _description.Text = _editing?.Description ?? _seed?.Description ?? string.Empty;
@@ -81,21 +78,21 @@ public sealed partial class CapturePage : PageBase
     private Grid TopBar()
     {
         var grid = new Grid { ColumnSpacing = 16 }; grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto }); grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var back = Ui.Button("← BACK"); back.Click += (_, _) => { if (_step > 1) { _step--; Build(); } else if (Frame?.CanGoBack == true) Frame.GoBack(); };
+        var back = Ui.Button("<- BACK"); back.Click += (_, _) => { if (_step > 1) { _step--; Build(); } else if (Frame?.CanGoBack == true) Frame.GoBack(); };
         grid.Children.Add(back); var copy = Ui.Stack(2); copy.Children.Add(Ui.Mono(_editing is null ? "CAPTURE CURRENT SETUP" : "UPDATE EXISTING PARCEL", 11, "#9BE28F", true)); copy.Children.Add(Ui.Text(_editing is null ? "Choose exactly what belongs in this parcel." : $"Updating {_editing.Name}", 12, false, "#8D9CA2")); Grid.SetColumn(copy, 1); grid.Children.Add(copy); return grid;
     }
 
     private StackPanel StepRail()
     {
-        var row = Ui.Row(); row.Children.Add(Ui.Tag("1  NAME", _step == 1 ? "#9BE28F" : "#8D9CA2")); row.Children.Add(Ui.Mono("——", 10));
-        row.Children.Add(Ui.Tag("2  SELECT ITEMS", _step == 2 ? "#9BE28F" : "#8D9CA2")); row.Children.Add(Ui.Mono("——", 10)); row.Children.Add(Ui.Tag("3  REVIEW", _step == 3 ? "#9BE28F" : "#8D9CA2")); return row;
+        var row = Ui.Row(); row.Children.Add(Ui.Tag("1  NAME", _step == 1 ? "#9BE28F" : "#8D9CA2")); row.Children.Add(Ui.Mono("--", 10));
+        row.Children.Add(Ui.Tag("2  SELECT ITEMS", _step == 2 ? "#9BE28F" : "#8D9CA2")); row.Children.Add(Ui.Mono("--", 10)); row.Children.Add(Ui.Tag("3  REVIEW", _step == 3 ? "#9BE28F" : "#8D9CA2")); return row;
     }
 
     private void BuildName(StackPanel body)
     {
         body.Children.Add(Ui.Text(_editing is null ? "Name this parcel" : "Check the parcel details", 26, true)); body.Children.Add(Ui.Text("The name and description stay inside WorkParcel.", 13, false, "#8D9CA2"));
         var fields = Ui.Stack(12); fields.Children.Add(_name); fields.Children.Add(_description); body.Children.Add(Ui.Card(fields, 18));
-        var next = Ui.Button("NEXT: SELECT ITEMS  →", true); next.HorizontalAlignment = HorizontalAlignment.Right; next.Click += async (_, _) => await GoToSelectionAsync(); body.Children.Add(next);
+        var next = Ui.Button("NEXT: SELECT ITEMS  ->", true); next.HorizontalAlignment = HorizontalAlignment.Right; next.Click += async (_, _) => await GoToSelectionAsync(); body.Children.Add(next);
     }
 
     private async Task GoToSelectionAsync()
@@ -108,20 +105,18 @@ public sealed partial class CapturePage : PageBase
     {
         body.Children.Add(Ui.Text("Select workspace items", 26, true));
         var tools = new Grid { ColumnSpacing = 9 }; tools.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); tools.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        tools.Children.Add(_search); var refresh = Ui.Button("↻ REFRESH WINDOWS"); refresh.Click += async (_, _) => await RefreshWindowsAsync(); Grid.SetColumn(refresh, 1); tools.Children.Add(refresh); body.Children.Add(tools);
+        tools.Children.Add(_search); var refresh = Ui.Button(">> REFRESH WINDOWS"); refresh.Click += async (_, _) => await RefreshWindowsAsync(); Grid.SetColumn(refresh, 1); tools.Children.Add(refresh); body.Children.Add(tools);
         var adds = new Grid { ColumnSpacing = 7, RowSpacing = 7 }; var addApp = Ui.Button("+ APPLICATION"); addApp.Click += async (_, _) => await AddApplicationAsync(); var addFiles = Ui.Button("+ FILES"); addFiles.Click += async (_, _) => await AddFilesAsync(); var addFolder = Ui.Button("+ FOLDER"); addFolder.Click += async (_, _) => await AddFolderAsync(); var addLink = Ui.Button("ADD LINK MANUALLY"); addLink.Click += async (_, _) => await AddLinkAsync(); var pasteLinks = Ui.Button("PASTE LINKS"); pasteLinks.Click += async (_, _) => await PasteLinksAsync(); var addNote = Ui.Button("+ NOTE"); addNote.Click += async (_, _) => await AddNoteAsync();
         var addButtons = new[] { addApp, addFiles, addFolder, addLink, pasteLinks, addNote }; foreach (var button in addButtons) { button.HorizontalAlignment = HorizontalAlignment.Stretch; adds.Children.Add(button); } ArrangeAddButtons(adds, addButtons, 900); adds.SizeChanged += (_, args) => ArrangeAddButtons(adds, addButtons, args.NewSize.Width); body.Children.Add(adds);
         var selectRow = Ui.Row(); var all = Ui.Button("SELECT ALL"); all.Click += (_, _) => { foreach (var item in FilteredDraft()) _selected.Add(item.Id); RebuildItemSections(); }; var none = Ui.Button("CLEAR ALL"); none.Click += (_, _) => { _selected.Clear(); RebuildItemSections(); }; selectRow.Children.Add(all); selectRow.Children.Add(none); selectRow.Children.Add(Ui.Spacer()); selectRow.Children.Add(_selectionStatus); selectRow.Children.Add(_workStatus); body.Children.Add(selectRow);
         body.Children.Add(DropTarget()); body.Children.Add(_itemHost);
-        var layoutCopy = Ui.Stack(3); layoutCopy.Children.Add(_rememberLayout); layoutCopy.Children.Add(Ui.Text("Remember eligible application-window geometry, monitor arrangement, DPI and window state. WorkParcel and system windows are excluded.", 11, false, "#8D9CA2")); body.Children.Add(Ui.Card(layoutCopy, 12));
-        RebuildItemSections(); var next = Ui.Button("NEXT: REVIEW  →", true); next.HorizontalAlignment = HorizontalAlignment.Right; next.Click += async (_, _) => await GoToReviewAsync(); body.Children.Add(next);
+        RebuildItemSections(); var next = Ui.Button("NEXT: REVIEW  ->", true); next.HorizontalAlignment = HorizontalAlignment.Right; next.Click += async (_, _) => await GoToReviewAsync(); body.Children.Add(next);
     }
 
     private async Task GoToReviewAsync()
     {
         _step = 3;
         Build();
-        await CaptureLayoutPreviewAsync();
     }
 
     private static void ArrangeAddButtons(Grid grid, IReadOnlyList<Button> buttons, double width)
@@ -134,10 +129,10 @@ public sealed partial class CapturePage : PageBase
 
     private void RebuildItemSections()
     {
-        _itemHost.Children.Clear(); UpdateSelectedText(); AddCategory("OPEN APPS & WINDOWS", _draft.Where(item => item.ItemType is ParcelItemType.ApplicationWindow or ParcelItemType.Application));
-        var browserInfo = Ui.Stack(3); var chrome = BrowserIntegrationService.Current.GetConnectionState("chrome"); var edge = BrowserIntegrationService.Current.GetConnectionState("edge"); browserInfo.Children.Add(Ui.Mono($"CHROME   {BrowserStateText(chrome)}   ·   EDGE   {BrowserStateText(edge)}", 10, chrome.State == BrowserConnectionState.Connected || edge.State == BrowserConnectionState.Connected ? "#9BE28F" : "#F0B45B", true)); browserInfo.Children.Add(Ui.Text("Only non-private HTTP/HTTPS tabs are offered. Browser-internal pages stay out of the parcel.", 11, false, "#8D9CA2")); _itemHost.Children.Add(Ui.Card(browserInfo, 12));
+        _itemHost.Children.Clear(); UpdateSelectedText(); AddCategory("APPLICATIONS & WINDOWS", _draft.Where(item => item.ItemType is ParcelItemType.ApplicationWindow or ParcelItemType.Application));
+        var browserInfo = Ui.Stack(3); var chrome = BrowserIntegrationService.Current.GetConnectionState("chrome"); var edge = BrowserIntegrationService.Current.GetConnectionState("edge"); browserInfo.Children.Add(Ui.Mono($"CHROME   {BrowserStateText(chrome)}   |   EDGE   {BrowserStateText(edge)}", 10, chrome.State == BrowserConnectionState.Connected || edge.State == BrowserConnectionState.Connected ? "#9BE28F" : "#F0B45B", true)); browserInfo.Children.Add(Ui.Text("Only non-private HTTP/HTTPS tabs are offered. Browser-internal pages stay out of the parcel.", 11, false, "#8D9CA2")); _itemHost.Children.Add(Ui.Card(browserInfo, 12));
         var connectChrome = Ui.Button("CONNECT A BROWSER"); connectChrome.Click += (_, _) => Frame?.Navigate(typeof(SettingsPage)); browserInfo.Children.Add(connectChrome);
-        AddBrowserTree(); AddCategory("BROWSER LINKS", _draft.Where(item => item.ItemType == ParcelItemType.WebLink)); AddCategory("FILES", _draft.Where(item => item.ItemType == ParcelItemType.File)); AddCategory("FOLDERS", _draft.Where(item => item.ItemType == ParcelItemType.Folder)); AddCategory("NOTES", _draft.Where(item => item.ItemType == ParcelItemType.Note));
+        AddBrowserTree(); AddCategory("LINKS", _draft.Where(item => item.ItemType == ParcelItemType.WebLink)); AddCategory("FILES & FOLDERS", _draft.Where(item => item.ItemType is ParcelItemType.File or ParcelItemType.Folder)); AddCategory("NOTES", _draft.Where(item => item.ItemType == ParcelItemType.Note));
     }
 
     private void AddBrowserTree()
@@ -178,45 +173,20 @@ public sealed partial class CapturePage : PageBase
         return Ui.Interactive(new Border { Child = row, Background = Ui.Resource("SurfaceBrush"), BorderBrush = Ui.Resource("BorderBrush"), BorderThickness = new Thickness(0, 0, 0, 1), Padding = new Thickness(9, 8, 9, 8) });
     }
 
-    private static string SelectionDetail(ParcelItem item) => item.ItemType == ParcelItemType.BrowserTab ? $"{item.BrowserFamily?.ToUpperInvariant() ?? "BROWSER"} · {item.BrowserDomain ?? item.SecondaryDetail ?? "unknown domain"} · {item.Value}{(item.BrowserPinned ? " · PINNED" : string.Empty)}" : item.SecondaryDetail ?? item.Value;
+    private static string SelectionDetail(ParcelItem item) => item.ItemType == ParcelItemType.BrowserTab ? $"{item.BrowserFamily?.ToUpperInvariant() ?? "BROWSER"} | {item.BrowserDomain ?? item.SecondaryDetail ?? "unknown domain"} | {item.Value}{(item.BrowserPinned ? " | PINNED" : string.Empty)}" : item.SecondaryDetail ?? item.Value;
 
     private void BuildReview(StackPanel body)
     {
         var chosen = _draft.Where(item => _selected.Contains(item.Id)).ToList(); body.Children.Add(Ui.Text("Review the parcel", 26, true)); body.Children.Add(Ui.Text("Only these checked items will be saved.", 13, false, "#8D9CA2"));
         var summary = Ui.Stack(4); summary.Children.Add(Ui.Mono($"{chosen.Count} ITEM{(chosen.Count == 1 ? string.Empty : "S")} SELECTED", 12, "#9BE28F", true)); summary.Children.Add(Ui.Text(_name.Text.Trim(), 15, true)); if (!string.IsNullOrWhiteSpace(_description.Text)) summary.Children.Add(Ui.Text(_description.Text.Trim(), 12, false, "#8D9CA2")); body.Children.Add(Ui.Card(summary, 16));
         foreach (var group in chosen.GroupBy(item => item.ItemType)) { body.Children.Add(Ui.SectionHeader(group.Key.ToString().ToUpperInvariant())); foreach (var item in group) { var status = _original.Contains(item.Id) ? "ALREADY SAVED" : "NEW"; var copy = Ui.Stack(2); copy.Children.Add(Ui.Text(item.DisplayName, 12, true)); copy.Children.Add(Ui.Mono(ReviewDetail(item), 9)); var row = Ui.Row(Ui.Tag(status, status == "NEW" ? "#9BE28F" : "#8D9CA2"), copy, Ui.Spacer(), Ui.Mono(item.AvailabilityLabel, 9, item.IsMissing ? "#F0B45B" : null)); body.Children.Add(new Border { Child = row, Padding = new Thickness(8), BorderBrush = Ui.Resource("BorderBrush"), BorderThickness = new Thickness(0, 0, 0, 1) }); } }
-        var layoutItems = chosen.Where(item => item.ItemType == ParcelItemType.ApplicationWindow).ToList();
-        if (_rememberLayout.IsChecked == true && layoutItems.Count > 0)
-        {
-            body.Children.Add(Ui.SectionHeader("DESK MEMORY", "This preview is generated from captured monitor and window geometry."));
-            if (_layoutPreview is not null)
-            {
-                body.Children.Add(DeskPreviewBuilder.Summary(_layoutPreview.Snapshot));
-                body.Children.Add(DeskPreviewBuilder.Build(_layoutPreview.Snapshot));
-                if (_layoutPreview.Failures.Count > 0) body.Children.Add(Ui.Text($"{_layoutPreview.Failures.Count} window{(_layoutPreview.Failures.Count == 1 ? string.Empty : "s")} could not be captured and will be left out of Desk Memory.", 11, false, "#F0B45B"));
-            }
-            else body.Children.Add(Ui.Text("Desk Memory preview is being prepared…", 11, false, "#8D9CA2"));
-        }
         if (chosen.Count == 0) body.Children.Add(Ui.Card(Ui.Text("This will create or update an empty parcel.", 12, false, "#8D9CA2"), 14));
-        var actions = Ui.Row(); var back = Ui.Button("← MODIFY SELECTION"); back.Click += (_, _) => { _step = 2; Build(); }; var save = Ui.Button(_editing is null ? "PACK PARCEL" : "UPDATE PARCEL", true); save.Click += async (_, _) => await SaveAsync(save); actions.Children.Add(back); actions.Children.Add(Ui.Spacer()); actions.Children.Add(save); body.Children.Add(actions);
-    }
-
-    private async Task CaptureLayoutPreviewAsync()
-    {
-        var chosen = _draft.Where(item => _selected.Contains(item.Id) && item.ItemType == ParcelItemType.ApplicationWindow).ToList();
-        if (_rememberLayout.IsChecked != true || chosen.Count == 0) { _layoutPreview = null; return; }
-        try
-        {
-            _layoutPreview = await _desk.CaptureAsync(_editing?.Id ?? Guid.Empty, chosen);
-            if (_step == 3) Build();
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception exception) { AppLogger.LogTechnicalError(exception); _layoutPreview = null; }
+        var actions = Ui.Row(); var back = Ui.Button("<- MODIFY SELECTION"); back.Click += (_, _) => { _step = 2; Build(); }; var save = Ui.Button(_editing is null ? "CREATE PARCEL" : "UPDATE PARCEL", true); save.Click += async (_, _) => await SaveAsync(save); actions.Children.Add(back); actions.Children.Add(Ui.Spacer()); actions.Children.Add(save); body.Children.Add(actions);
     }
 
     private async Task RefreshWindowsAsync()
     {
-        if (_busy) return; _busy = true; _workStatus.Text = "DETECTING WINDOWS…"; _loadCancellation?.Cancel(); _loadCancellation = new CancellationTokenSource();
+        if (_busy) return; _busy = true; _workStatus.Text = "DETECTING WINDOWS..."; _loadCancellation?.Cancel(); _loadCancellation = new CancellationTokenSource();
         try
         {
             var windowsTask = _windows.DetectAsync(_editing?.Id ?? Guid.Empty, _loadCancellation.Token);
@@ -225,7 +195,7 @@ public sealed partial class CapturePage : PageBase
             foreach (var old in _draft.Where(item => _detected.Contains(item.Id) || _detectedBrowser.Contains(item.Id)).ToList()) { _draft.Remove(old); _selected.Remove(old.Id); _detected.Remove(old.Id); _detectedBrowser.Remove(old.Id); }
             foreach (var savedItem in _draft.Where(item => item.ItemType == ParcelItemType.ApplicationWindow && !_detected.Contains(item.Id))) { savedItem.RuntimeWindowHandle = nint.Zero; savedItem.RuntimeProcessId = 0; }
             var matchedWindowHandles = new HashSet<nint>();
-            foreach (var match in OpenWindowService.MatchSavedItems(_draft, windows).Where(match => match.Live is not null))
+            foreach (var match in OpenWindowService.MatchSavedItemsByIdentity(_draft, windows).Where(match => match.Live is not null))
             {
                 var live = windows.FirstOrDefault(item => item.RuntimeWindowHandle == match.Live!.Handle);
                 if (live is null) continue;
@@ -233,18 +203,18 @@ public sealed partial class CapturePage : PageBase
             }
             foreach (var window in windows.Where(window => !matchedWindowHandles.Contains(window.RuntimeWindowHandle))) { _draft.Add(window); _selected.Add(window.Id); _detected.Add(window.Id); }
             var skippedTabs = 0; var matchedBrowserIds = new HashSet<Guid>(); var browserGroups = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase); foreach (var savedItem in _draft.Where(item => item.ItemType == ParcelItemType.BrowserTab)) { savedItem.BrowserSessionTabId = null; savedItem.BrowserSessionWindowId = null; savedItem.BrowserConnectionId = null; savedItem.CloseSupported = false; } foreach (var tab in browserTabs) { if (!BrowserTabRules.IsAllowedForCapture(tab)) { skippedTabs++; continue; } var saved = BrowserIntegrationService.FindSavedTab(_draft, tab, matchedBrowserIds, browserGroups); if (saved is not null) { matchedBrowserIds.Add(saved.Id); BrowserIntegrationService.ApplyLiveTab(saved, tab); continue; } var candidate = BrowserIntegrationService.FromTab(_editing?.Id ?? Guid.Empty, tab, _draft.Count, null); _draft.Add(candidate); _selected.Add(candidate.Id); _detectedBrowser.Add(candidate.Id); matchedBrowserIds.Add(candidate.Id); }
-            _loadedItems = true; _workStatus.Text = $"{windows.Count} WINDOWS · {browserTabs.Count - skippedTabs} TABS"; RebuildItemSections();
+            _loadedItems = true; _workStatus.Text = $"{windows.Count} WINDOWS | {browserTabs.Count - skippedTabs} TABS"; RebuildItemSections();
         }
         catch (OperationCanceledException) { _workStatus.Text = "REFRESH CANCELED"; }
-        catch (Exception exception) { AppLogger.LogTechnicalError(exception); _workStatus.Text = "WINDOW DETECTION FAILED — RETRY"; }
+        catch (Exception exception) { AppLogger.LogTechnicalError(exception); _workStatus.Text = "WINDOW DETECTION FAILED - RETRY"; }
         finally { _busy = false; }
     }
 
-    private static string BrowserStateText(BrowserConnectionStateInfo info) => info.State switch { BrowserConnectionState.Connected => $"CONNECTED · {info.Details.WindowCount} WINDOW{(info.Details.WindowCount == 1 ? string.Empty : "S")} / {info.Details.TabCount} TAB{(info.Details.TabCount == 1 ? string.Empty : "S")}", BrowserConnectionState.ConnectionFailed => "CONNECTION NEEDS ATTENTION", BrowserConnectionState.BrowserMissing => "BROWSER NOT FOUND", BrowserConnectionState.Disabled => "TAB CAPTURE OFF", BrowserConnectionState.ExtensionRequired => "SETUP IN PROGRESS", BrowserConnectionState.DesktopConnectionRequired => "SETUP IN PROGRESS", BrowserConnectionState.ReadyToTest => "READY TO TEST", _ => "NOT CONNECTED" };
+    private static string BrowserStateText(BrowserConnectionStateInfo info) => info.State switch { BrowserConnectionState.Connected => $"CONNECTED | {info.Details.WindowCount} WINDOW{(info.Details.WindowCount == 1 ? string.Empty : "S")} / {info.Details.TabCount} TAB{(info.Details.TabCount == 1 ? string.Empty : "S")}", BrowserConnectionState.ConnectionFailed => "CONNECTION NEEDS ATTENTION", BrowserConnectionState.BrowserMissing => "BROWSER NOT FOUND", BrowserConnectionState.Disabled => "TAB CAPTURE OFF", BrowserConnectionState.ExtensionRequired => "SETUP IN PROGRESS", BrowserConnectionState.DesktopConnectionRequired => "SETUP IN PROGRESS", BrowserConnectionState.ReadyToTest => "READY TO TEST", _ => "NOT CONNECTED" };
 
     private async Task AddApplicationAsync() { var path = await _pickers.PickApplicationAsync(); if (path is null) return; try { AddDraft(_factory.Application(_editing?.Id ?? Guid.Empty, path, _draft.Count)); } catch (Exception e) { await ShowItemError(e); } }
     private async Task AddFolderAsync() { var path = await _pickers.PickFolderAsync(); if (path is null) return; try { AddDraft(_factory.Folder(_editing?.Id ?? Guid.Empty, path, _draft.Count)); } catch (Exception e) { await ShowItemError(e); } }
-    private async Task AddFilesAsync() { var paths = await _pickers.PickFilesAsync(); if (paths.Count == 0) return; _workStatus.Text = "READING FILE METADATA…"; var failed = 0; var duplicates = 0; foreach (var path in paths) { try { AddDraft(await _factory.FileAsync(_editing?.Id ?? Guid.Empty, path, _draft.Count)); } catch (DuplicateParcelItemException) { duplicates++; } catch (Exception exception) { AppLogger.LogTechnicalError(exception); failed++; } } _workStatus.Text = $"{paths.Count - failed - duplicates} READY · {duplicates} DUPLICATE · {failed} UNAVAILABLE"; }
+    private async Task AddFilesAsync() { var paths = await _pickers.PickFilesAsync(); if (paths.Count == 0) return; _workStatus.Text = "READING FILE METADATA..."; var failed = 0; var duplicates = 0; foreach (var path in paths) { try { AddDraft(await _factory.FileAsync(_editing?.Id ?? Guid.Empty, path, _draft.Count)); } catch (DuplicateParcelItemException) { duplicates++; } catch (Exception exception) { AppLogger.LogTechnicalError(exception); failed++; } } _workStatus.Text = $"{paths.Count - failed - duplicates} READY | {duplicates} DUPLICATE | {failed} UNAVAILABLE"; }
 
     private Border DropTarget()
     {
@@ -256,7 +226,7 @@ public sealed partial class CapturePage : PageBase
 
     private async Task AddDroppedAsync(DataPackageView data)
     {
-        if (!data.Contains(StandardDataFormats.StorageItems)) return; var failed = 0; var added = 0; _workStatus.Text = "PROCESSING DROP…";
+        if (!data.Contains(StandardDataFormats.StorageItems)) return; var failed = 0; var added = 0; _workStatus.Text = "PROCESSING DROP...";
         try
         {
             foreach (var entry in await data.GetStorageItemsAsync())
@@ -264,14 +234,14 @@ public sealed partial class CapturePage : PageBase
                 try { if (entry is StorageFile file) AddDraft(await _factory.FileAsync(_editing?.Id ?? Guid.Empty, file.Path, _draft.Count), false); else if (entry is StorageFolder folder) AddDraft(_factory.Folder(_editing?.Id ?? Guid.Empty, folder.Path, _draft.Count), false); else { failed++; continue; } added++; }
                 catch (Exception exception) { AppLogger.LogTechnicalError(exception); failed++; }
             }
-            _workStatus.Text = $"{added} ATTACHED · {failed} SKIPPED"; RebuildItemSections();
+            _workStatus.Text = $"{added} ATTACHED | {failed} SKIPPED"; RebuildItemSections();
         }
         catch (Exception exception) { AppLogger.LogTechnicalError(exception); _workStatus.Text = "DROP COULD NOT BE READ"; }
     }
 
     private async Task AddLinkAsync()
     {
-        var title = new TextBox { Header = "DISPLAY NAME — OPTIONAL" }; var url = new TextBox { Header = "HTTP/HTTPS URL", PlaceholderText = "https://" }; var note = new TextBox { Header = "SHORT NOTE — OPTIONAL" }; var stack = Ui.Stack(9); stack.Children.Add(title); stack.Children.Add(url); stack.Children.Add(note);
+        var title = new TextBox { Header = "DISPLAY NAME - OPTIONAL" }; var url = new TextBox { Header = "HTTP/HTTPS URL", PlaceholderText = "https://" }; var note = new TextBox { Header = "SHORT NOTE - OPTIONAL" }; var stack = Ui.Stack(9); stack.Children.Add(title); stack.Children.Add(url); stack.Children.Add(note);
         var dialog = new ContentDialog { Title = "ADD WEB LINK", Content = stack, PrimaryButtonText = "ADD LINK", CloseButtonText = "CANCEL", XamlRoot = XamlRoot, DefaultButton = ContentDialogButton.Primary }; dialog.PrimaryButtonClick += (sender, args) => { if (!WebLinkRules.TryNormalize(url.Text, out _)) { args.Cancel = true; url.Description = "Enter a valid HTTP or HTTPS link."; } };
         if (await Ui.ShowDialog(dialog) != ContentDialogResult.Primary) return; try { AddDraft(_factory.WebLink(_editing?.Id ?? Guid.Empty, url.Text, title.Text, note.Text, _draft.Count)); } catch (Exception e) { await ShowItemError(e); }
     }
@@ -281,14 +251,14 @@ public sealed partial class CapturePage : PageBase
         var input = new TextBox { Header = "ONE HTTP/HTTPS LINK PER LINE", AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 170 }; var dialog = new ContentDialog { Title = "PASTE LINKS", Content = input, PrimaryButtonText = "CHECK LINKS", CloseButtonText = "CANCEL", XamlRoot = XamlRoot };
         if (await Ui.ShowDialog(dialog) != ContentDialogResult.Primary) return; var parsed = WebLinkRules.ParseMany(input.Text);
         if (parsed.Valid.Count == 0) { await Dialogs.ShowMessage(this, "NO VALID LINKS", "Enter at least one HTTP or HTTPS link. Nothing was added."); return; }
-        if (parsed.Invalid.Count > 0 && !await Dialogs.Confirm(this, "INVALID LINKS FOUND", $"These lines are not HTTP/HTTPS links and will not be saved:\n\n{string.Join("\n", parsed.Invalid.Take(8))}{(parsed.Invalid.Count > 8 ? "\n…" : string.Empty)}\n\nAdd the {parsed.Valid.Count} valid link{(parsed.Valid.Count == 1 ? string.Empty : "s")} only?", "ADD VALID LINKS")) return;
+        if (parsed.Invalid.Count > 0 && !await Dialogs.Confirm(this, "INVALID LINKS FOUND", $"These lines are not HTTP/HTTPS links and will not be saved:\n\n{string.Join("\n", parsed.Invalid.Take(8))}{(parsed.Invalid.Count > 8 ? "\n..." : string.Empty)}\n\nAdd the {parsed.Valid.Count} valid link{(parsed.Valid.Count == 1 ? string.Empty : "s")} only?", "ADD VALID LINKS")) return;
         var duplicates = 0; foreach (var link in parsed.Valid) { try { AddDraft(_factory.WebLink(_editing?.Id ?? Guid.Empty, link.AbsoluteUri, null, null, _draft.Count), false); } catch (DuplicateParcelItemException) { duplicates++; } }
         if (duplicates > 0) await Dialogs.ShowMessage(this, "DUPLICATE LINKS SKIPPED", $"{duplicates} link{(duplicates == 1 ? string.Empty : "s")} already existed in this parcel."); RebuildItemSections();
     }
 
     private async Task AddNoteAsync()
     {
-        var title = new TextBox { Header = "SHORT TITLE — OPTIONAL" }; var content = new TextBox { Header = "NOTE", AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 140 }; var stack = Ui.Stack(9); stack.Children.Add(title); stack.Children.Add(content);
+        var title = new TextBox { Header = "SHORT TITLE - OPTIONAL" }; var content = new TextBox { Header = "NOTE", AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 140 }; var stack = Ui.Stack(9); stack.Children.Add(title); stack.Children.Add(content);
         var dialog = new ContentDialog { Title = "ADD NOTE", Content = stack, PrimaryButtonText = "ADD NOTE", CloseButtonText = "CANCEL", XamlRoot = XamlRoot }; dialog.PrimaryButtonClick += (_, args) => { if (string.IsNullOrWhiteSpace(content.Text)) { args.Cancel = true; content.Description = "Write something before adding the note."; } };
         if (await Ui.ShowDialog(dialog) == ContentDialogResult.Primary) try { AddDraft(_factory.Note(_editing?.Id ?? Guid.Empty, title.Text, content.Text, _draft.Count)); } catch (Exception e) { await ShowItemError(e); }
     }
@@ -304,32 +274,28 @@ public sealed partial class CapturePage : PageBase
             var removals = _original.Count(id => !_selected.Contains(id));
             if (removals > 0 && !await Dialogs.Confirm(this, "REMOVE SAVED ITEM RECORDS?", $"{removals} item record{(removals == 1 ? string.Empty : "s")} will be removed from WorkParcel. Original files, folders and applications stay untouched.", "REMOVE AND UPDATE")) return;
         }
-        _busy = true; button.IsEnabled = false; button.Content = Ui.Mono("SAVING...", 11, "#0B0E10", true);
+
+        _busy = true;
+        button.IsEnabled = false;
+        button.Content = Ui.Mono("SAVING...", 11, "#0B0E10", true);
         try
         {
-            DeskLayoutSnapshot? layout = null;
-            var layoutItems = chosen.Where(item => item.ItemType == ParcelItemType.ApplicationWindow).ToList();
-            if (_rememberLayout.IsChecked == true && layoutItems.Count > 0)
-            {
-                var targetParcelId = _editing?.Id ?? Guid.NewGuid();
-                var capture = await _desk.CaptureAsync(targetParcelId, layoutItems);
-                layout = capture.Snapshot;
-                if (capture.Failures.Count > 0 && !await Dialogs.Confirm(this, "SOME WINDOWS WERE NOT CAPTURED", $"{capture.Failures.Count} selected window{(capture.Failures.Count == 1 ? string.Empty : "s")} could not be safely measured. Save the available Desk Memory records and continue?", "SAVE AVAILABLE LAYOUT")) return;
-            }
             Parcel parcel;
             if (_editing is null)
             {
-                parcel = await Store.CreateWithItemsAsync(_name.Text, _description.Text, chosen, deskLayout: layout, parcelId: layout is null ? null : layout.ParcelId);
+                parcel = await Store.CreateWithItemsAsync(_name.Text, _description.Text, chosen);
             }
             else
             {
                 parcel = _editing;
                 var added = chosen.Count(item => !_original.Contains(item.Id));
                 var removed = _original.Count(id => !_selected.Contains(id));
-                await Store.ReplaceItemsAsync(parcel, chosen, $"Parcel updated - {added} added · {removed} removed", ParcelHistoryEventType.Updated, deskLayout: layout, clearDeskLayout: _rememberLayout.IsChecked != true || layoutItems.Count == 0);
+                await Store.ReplaceItemsAsync(parcel, chosen, $"Parcel updated - {added} added | {removed} removed", ParcelHistoryEventType.Updated);
             }
+
             var changed = _editing is null ? chosen.Count : chosen.Count(item => !_original.Contains(item.Id));
-            await Dialogs.ShowMessage(this, _editing is null ? "PARCEL PACKED" : "PARCEL UPDATED", _editing is null ? $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} SAVED" : $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} ADDED");
+            await Dialogs.ShowMessage(this, _editing is null ? "PARCEL CREATED" : "PARCEL UPDATED",
+                _editing is null ? $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} SAVED" : $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} ADDED");
             Frame?.Navigate(typeof(ParcelDetailsPage), parcel.Id);
         }
         catch (Exception exception)
@@ -338,73 +304,13 @@ public sealed partial class CapturePage : PageBase
             await Dialogs.ShowMessage(this, "PARCEL WAS NOT SAVED", "Your selection is still here. Check the item details and try again.");
             button.IsEnabled = true;
         }
-        finally { _busy = false; }
-    }
-
-    private async Task SaveAsyncLegacy(Button button)
-    {
-        if (_busy) return;
-        var chosen = _draft.Where(item => _selected.Contains(item.Id)).ToList();
-        if (_editing is not null)
-        {
-            var removals = _original.Count(id => !_selected.Contains(id));
-            if (removals > 0 && !await Dialogs.Confirm(this, "REMOVE SAVED ITEM RECORDS?", $"{removals} item record{(removals == 1 ? string.Empty : "s")} will be removed from WorkParcel. Original files, folders and applications stay untouched.", "REMOVE AND UPDATE")) return;
-        }
-        _busy = true; button.IsEnabled = false; button.Content = Ui.Mono("SAVING...", 11, "#0B0E10", true);
-        try
-        {
-            DeskLayoutSnapshot? layout = null;
-            var layoutItems = chosen.Where(item => item.ItemType == ParcelItemType.ApplicationWindow).ToList();
-            if (_rememberLayout.IsChecked == true && layoutItems.Count > 0)
-            {
-                var targetParcelId = _editing?.Id ?? Guid.NewGuid();
-                var capture = await _desk.CaptureAsync(targetParcelId, layoutItems);
-                layout = capture.Snapshot;
-                if (capture.Failures.Count > 0 && !await Dialogs.Confirm(this, "SOME WINDOWS WERE NOT CAPTURED", $"{capture.Failures.Count} selected window{(capture.Failures.Count == 1 ? string.Empty : "s")} could not be safely measured. Save the available Desk Memory records and continue?", "SAVE AVAILABLE LAYOUT")) return;
-            }
-            Parcel parcel;
-            if (_editing is null)
-            {
-                parcel = await Store.CreateWithItemsAsync(_name.Text, _description.Text, chosen, deskLayout: layout, parcelId: layout is null ? null : layout.ParcelId);
-            }
-            else
-            {
-                parcel = _editing;
-                var added = chosen.Count(item => !_original.Contains(item.Id));
-                var removed = _original.Count(id => !_selected.Contains(id));
-                await Store.ReplaceItemsAsync(parcel, chosen, $"Parcel updated - {added} added · {removed} removed", ParcelHistoryEventType.Updated, deskLayout: layout, clearDeskLayout: _rememberLayout.IsChecked != true || layoutItems.Count == 0);
-            }
-            var changed = _editing is null ? chosen.Count : chosen.Count(item => !_original.Contains(item.Id));
-            await Dialogs.ShowMessage(this, _editing is null ? "PARCEL PACKED" : "PARCEL UPDATED", _editing is null ? $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} SAVED" : $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} ADDED");
-            Frame?.Navigate(typeof(ParcelDetailsPage), parcel.Id);
-        }
-        catch (Exception exception)
-        {
-            AppLogger.LogTechnicalError(exception);
-            await Dialogs.ShowMessage(this, "PARCEL WAS NOT SAVED", "Your selection is still here. Check the item details and try again.");
-            button.IsEnabled = true;
-        }
-        finally { _busy = false; }
-    }
-
-    private async Task SaveAsyncLegacy2(Button button)
-    {
-        if (_busy) return; var chosen = _draft.Where(item => _selected.Contains(item.Id)).ToList();
-        if (_editing is not null) { var removals = _original.Count(id => !_selected.Contains(id)); if (removals > 0 && !await Dialogs.Confirm(this, "REMOVE SAVED ITEM RECORDS?", $"{removals} item record{(removals == 1 ? string.Empty : "s")} will be removed from WorkParcel. Original files, folders and applications stay untouched.", "REMOVE AND UPDATE")) return; }
-        _busy = true; button.IsEnabled = false; button.Content = Ui.Mono("SAVING…", 11, "#0B0E10", true);
-        try
-        {
-            Parcel parcel; if (_editing is null) parcel = await Store.CreateWithItemsAsync(_name.Text, _description.Text, chosen); else { parcel = _editing; var added = chosen.Count(item => !_original.Contains(item.Id)); var removed = _original.Count(id => !_selected.Contains(id)); await Store.ReplaceItemsAsync(parcel, chosen, $"Parcel updated — {added} added · {removed} removed", ParcelHistoryEventType.Updated); }
-            var changed = _editing is null ? chosen.Count : chosen.Count(item => !_original.Contains(item.Id)); await Dialogs.ShowMessage(this, _editing is null ? "PARCEL PACKED" : "PARCEL UPDATED", _editing is null ? $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} SAVED" : $"{changed} ITEM{(changed == 1 ? string.Empty : "S")} ADDED"); Frame?.Navigate(typeof(ParcelDetailsPage), parcel.Id);
-        }
-        catch (Exception exception) { AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "PARCEL WAS NOT SAVED", "Your selection is still here. Check the item details and try again."); button.IsEnabled = true; }
         finally { _busy = false; }
     }
 
     private IEnumerable<ParcelItem> FilteredDraft() => _draft.Where(MatchesSearch);
-    private static string ReviewDetail(ParcelItem item) => item.ItemType == ParcelItemType.ApplicationWindow ? $"{item.SecondaryDetail ?? item.Value} · {(item.LaunchEnabled ? "REOPENS APP; DESK MEMORY RESTORES POSITION AND SIZE" : "AUTOMATIC REOPEN UNSUPPORTED")}" : item.SecondaryDetail ?? item.Value;
+    private static string ReviewDetail(ParcelItem item) => item.ItemType == ParcelItemType.ApplicationWindow ? $"{item.SecondaryDetail ?? item.Value} | {(item.LaunchEnabled ? "REOPENS APP" : "AUTOMATIC REOPEN UNSUPPORTED")}" : item.SecondaryDetail ?? item.Value;
     private async void QueueSearchRefresh() { var version = ++_searchVersion; await Task.Delay(180); if (version == _searchVersion && _step == 2) RebuildItemSections(); }
     private bool MatchesSearch(ParcelItem item) => string.IsNullOrWhiteSpace(_search.Text) || item.DisplayName.Contains(_search.Text.Trim(), StringComparison.OrdinalIgnoreCase) || item.Value.Contains(_search.Text.Trim(), StringComparison.OrdinalIgnoreCase) || (item.SecondaryDetail?.Contains(_search.Text.Trim(), StringComparison.OrdinalIgnoreCase) ?? false) || (item.BrowserFamily?.Contains(_search.Text.Trim(), StringComparison.OrdinalIgnoreCase) ?? false) || (item.BrowserWindowGroupId?.Contains(_search.Text.Trim(), StringComparison.OrdinalIgnoreCase) ?? false) || (item.BrowserTabGroupTitle?.Contains(_search.Text.Trim(), StringComparison.OrdinalIgnoreCase) ?? false);
-    private void UpdateSelectedText() => _selectionStatus.Text = $"{_selected.Count} SELECTED · {_draft.Count} TOTAL";
+    private void UpdateSelectedText() => _selectionStatus.Text = $"{_selected.Count} SELECTED | {_draft.Count} TOTAL";
     private async Task ShowItemError(Exception exception) { AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, exception is DuplicateParcelItemException ? "ITEM ALREADY ADDED" : "ITEM COULD NOT BE ADDED", exception is DuplicateParcelItemException ? "That item is already in this parcel." : "WorkParcel could not read that item. It may be missing, inaccessible or unsupported."); }
 }

@@ -1,102 +1,45 @@
 # WorkParcel
 
-### Pack your workspace. Open it when you return.
+### Save the work. Open it when you return.
 
-While working on smth, I usually have a bunch of files, folders, apps and browser tabs open.
-
-Once I close everything, finding and opening the whole setup again is sooo annoying.
-
-That’s why I made WorkParcel.
-
-It lets you save your whole setup inside a **parcel**, pack it away and open it again whenever you wanna continue.
+WorkParcel saves a focused work setup as a local parcel so you can return to it later. Parcels can contain files, folders, applications, open application windows, web links, supported browser tabs, and notes.
 
 ## Download
 
-WorkParcel is made for Windows.
+WorkParcel 0.2.0 Beta is a public beta for Windows 10/11 x64. Download the installer and release checksums from the [GitHub Releases page](https://github.com/arpitaa31/WorkParcel/releases).
 
-The installer is added to GitHub Releases. After installing it, you’ll be able to open WorkParcel normally from your Desktop, Start Menu or Windows Search.
-A portable ZIP version will also be available.
+The beta installer includes the .NET runtime and Windows App SDK dependencies, so the installed app launches without VS Code, the .NET SDK, or `dotnet run`.
 
-## How does it work?
+## How it works
 
-### 1. Create a parcel
-
-Give your setup a name, like:
-
-* WorkParcel Development
-* School Project
-* Website Work
-* Video Editing
-
-### 2. Choose your stuff
-
-You can select exactly what you wanna save:
-
-* Open apps and windows
-* Files
-* Folders
-* Applications
-* Website links
-* Browser tabs
-* Notes
-
-Everything has a checkbox, so unrelated apps won’t be added unless you select them.
-
-### 3. Pack it away
-
-Review everything and click **Pack Away**.
-
-The parcel gets saved locally and stays there even after restarting the app or computer.
-
-### 4. Open it again
-
-Whenever you wanna continue, open the parcel and choose which items you wanna launch.
-
-Files open in their usual apps, folders open in File Explorer, links open in your browser and supported apps launch again.
-
-## Desk Memory
-
-Desk Memory also remembers where your app windows were placed.
-
-It can save:
-
-* Window position
-* Window size
-* Maximised or normal state
-* Which monitor it was on
-
-So if VS Code was on the left, Chrome was on another monitor and Terminal was underneath, WorkParcel can bring them back to the same layout.
-If a saved monitor isn’t connected, it safely moves those windows to an available screen instead of leaving them off-screen.
+1. Create a parcel and give it a name.
+2. Select the files, folders, applications, open windows, links, browser tabs, and notes that belong in it.
+3. Create the parcel. The selected content stays open and is not moved or copied.
+4. Open the parcel later and choose which saved items to launch. Pack Away can save the current selection and, only when requested, ask selected supported applications or browser tabs to close normally.
 
 ## Main features
 
-* Select open apps and windows
-* Save website links and notes
-* Pack everything into one parcel
-* Reopen the setup later
-* Remember window layouts with Desk Memory
-* Simple Today to-do list
-* Archive and restore parcels
-* Dark and light themes
-* Local SQLite storage
+- Select open applications and windows, files, folders, applications, links, browser tabs, and notes.
+- Reopen supported saved items without changing unrelated resources.
+- Check availability, re-link missing files or folders, and accept changed file versions.
+- Track Today tasks, archive parcels, and restore them from Archive.
+- Use local SQLite storage, backups, and System, Light, or Dark themes.
 
-## Is it safe?
+## Safety and privacy
 
-WorkParcel does not move, copy or delete your real files.
-Removing a file or folder from a parcel only removes its WorkParcel record.
-If you choose **Save and Close**, WorkParcel asks supported windows to close normally. It does not force-kill apps or skip their unsaved-work warnings.
-Everything is stored locally. WorkParcel does not read browser history, passwords, cookies or webpage content.
+WorkParcel keeps data on the user's computer. It does not move, copy, or delete real files or folders. Removing an item removes only its WorkParcel record. Save and Close requests normal close messages; it does not force-kill applications or bypass unsaved-work prompts. WorkParcel does not read browser history, passwords, cookies, page contents, or keystrokes.
 
 ## Browser tabs
 
-Automatic tab capture needs the optional WorkParcel extension for Chrome or Edge.
-It lets you select particular tabs, save them inside a parcel and reopen them later.
-The extension is not on the browser stores yet, so it currently has to be installed manually.
-Manual website links work without the extension.
+The optional Chrome/Edge browser extension is required only for browser-tab integration. It lets you choose eligible non-private HTTP/HTTPS tabs during capture and reopen them later. The extension is not yet published in the browser stores and must be loaded manually. Files, folders, applications, open windows, links, notes, parcels, Today, Archive, and Restore work without it. Manual web links do not require the extension.
+
+## Beta status and bug reports
+
+This is a public beta. Report reproducible bugs, compatibility problems, and feature feedback through [GitHub Issues](https://github.com/arpitaa31/WorkParcel/issues). Do not include private parcel contents, database files, browser profiles, credentials, or tokens in an issue.
 
 ## Run from source
 
-You’ll need Windows and the .NET 10 SDK.
+You need Windows and the .NET 10 SDK.
 
 ```powershell
 git clone https://github.com/arpitaa31/WorkParcel.git
@@ -104,18 +47,13 @@ cd WorkParcel
 dotnet restore .\WorkParcel.slnx
 dotnet build .\WorkParcel.slnx
 dotnet test .\WorkParcel.slnx
-dotnet run --project .\src\WorkParcel.App\WorkParcel.App.csproj
+dotnet run --project .\src\WorkParcel.App\WorkParcel.App.csproj --no-restore -p:WindowsPackageType=None -p:EnableMsixTooling=false -p:EnableWinAppRunSupport=false
 ```
 
 ## Built with
 
-* C#
-* .NET 10
-* WinUI 3
-* Windows App SDK
-* SQLite
-* Win32 APIs
-* Chromium extension
-
-# Conclusion
-WorkParcel started as a simple idea for saving a few files and apps together, but now it’s slowly becoming a proper Windows workspace manager :D And i myself would want to use this daily, cuz editing and working on diff tasks with sooo many tabs open, and then after closing them, reopening them is a big task!
+- C# and .NET 10
+- WinUI 3 and Windows App SDK
+- SQLite
+- Win32 APIs for application-window detection and safe close requests
+- Chrome and Edge browser extension integration

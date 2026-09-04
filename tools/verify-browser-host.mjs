@@ -13,7 +13,7 @@ const appMessage = {
   type: "connection_status",
   browser: "chrome",
   connectionId: "fake-app-connection",
-  extensionVersion: "0.1.0",
+  extensionVersion: "0.2.0",
   timestampUtc: new Date().toISOString(),
   payload: { status: "CONNECTED" }
 };

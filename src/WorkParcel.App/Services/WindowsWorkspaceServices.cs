@@ -5,8 +5,8 @@ using WorkParcel_App.Models;
 
 namespace WorkParcel_App.Services;
 
-public sealed record WindowCandidate(nint Handle, uint ProcessId, string Title, string ProcessName, string? ExecutablePath, string FriendlyName, bool Visible, bool ToolWindow, string? WindowClassName = null);
-public sealed record SavedWindowMatch(ParcelItem Item, WindowCandidate? Live, int Score, int ScoreMargin, bool IsAmbiguous, string Explanation);
+public sealed record WindowCandidate(nint Handle, uint ProcessId, string Title, string ProcessName, string? ExecutablePath, bool Visible, bool ToolWindow, string? WindowClassName = null);
+public sealed record SavedWindowMatch(ParcelItem Item, WindowCandidate? Live);
 
 public sealed class OpenWindowService
 {
@@ -26,39 +26,40 @@ public sealed class OpenWindowService
 
     public static bool IsSystemNoise(string processName) => SystemNoise.Contains(processName);
 
-    public static IReadOnlyList<SavedWindowMatch> MatchSavedItems(IEnumerable<ParcelItem> savedItems, IEnumerable<WindowCandidate> liveWindows)
+    public static IReadOnlyList<SavedWindowMatch> MatchSavedItemsByIdentity(IEnumerable<ParcelItem> savedItems, IEnumerable<WindowCandidate> liveWindows)
     {
-        var available = liveWindows.Where(window => window.Visible && !window.ToolWindow).ToList();
+        var available = liveWindows.Where(window => ShouldInclude(window, (uint)Environment.ProcessId)).ToList();
         var matches = new List<SavedWindowMatch>();
         foreach (var item in savedItems.Where(item => item.ItemType == ParcelItemType.ApplicationWindow))
         {
-            var candidates = available.Select(window => (Window: window, Score: ScoreSavedItem(item, window)))
-                .Where(candidate => candidate.Score > 0)
-                .OrderByDescending(candidate => candidate.Score)
-                .ThenBy(candidate => candidate.Window.ProcessId)
-                .ToList();
-            if (candidates.Count == 0 || candidates[0].Score < 60)
+            var candidates = available.Where(window => HasSameIdentity(item, window)).ToList();
+            if (candidates.Count == 1)
             {
-                matches.Add(new(item, null, candidates.FirstOrDefault().Score, 0, false, "No current top-level window met the saved identity threshold."));
-                continue;
+                available.Remove(candidates[0]);
+                matches.Add(new(item, candidates[0]));
             }
-            var best = candidates[0]; var second = candidates.Skip(1).Select(candidate => candidate.Score).FirstOrDefault(); var margin = best.Score - second;
-            var ambiguous = candidates.Count > 1 && margin < 12;
-            if (ambiguous)
-            {
-                matches.Add(new(item, null, best.Score, margin, true, "Multiple current windows have similarly strong saved identities; nothing was closed automatically."));
-                continue;
-            }
-            available.Remove(best.Window);
-            matches.Add(new(item, best.Window, best.Score, margin, false, ExplainSavedItem(item, best.Window)));
+            else matches.Add(new(item, null));
         }
         return matches;
     }
 
-    public static IReadOnlyList<SavedWindowMatch> MatchSavedItems(IEnumerable<ParcelItem> savedItems, IEnumerable<ParcelItem> liveItems) =>
-        MatchSavedItems(savedItems, liveItems.Where(item => item.ItemType == ParcelItemType.ApplicationWindow).Select(item =>
+    public static IReadOnlyList<SavedWindowMatch> MatchSavedItemsByIdentity(IEnumerable<ParcelItem> savedItems, IEnumerable<ParcelItem> liveItems) =>
+        MatchSavedItemsByIdentity(savedItems, liveItems.Where(item => item.ItemType == ParcelItemType.ApplicationWindow).Select(item =>
             new WindowCandidate(item.RuntimeWindowHandle, item.RuntimeProcessId, item.WindowTitle ?? item.DisplayName, item.ProcessName ?? string.Empty,
-                item.ExecutablePath, item.DisplayName, true, false, item.WindowClassName)));
+                item.ExecutablePath, true, false, item.WindowClassName)));
+
+    private static bool HasSameIdentity(ParcelItem item, WindowCandidate live)
+    {
+        if (!ShouldInclude(live, (uint)Environment.ProcessId)) return false;
+
+        var savedExecutable = WindowsPathIdentity.Normalize(item.ExecutablePath);
+        var liveExecutable = WindowsPathIdentity.Normalize(live.ExecutablePath);
+        if (!string.IsNullOrWhiteSpace(savedExecutable) && !string.Equals(savedExecutable, liveExecutable, StringComparison.OrdinalIgnoreCase)) return false;
+
+        if (string.IsNullOrWhiteSpace(item.ProcessName) || !string.Equals(item.ProcessName, live.ProcessName, StringComparison.OrdinalIgnoreCase)) return false;
+        if (WindowIdentity.NormalizeTitle(item.WindowTitle ?? item.DisplayName) != WindowIdentity.NormalizeTitle(live.Title)) return false;
+        return string.IsNullOrWhiteSpace(item.WindowClassName) || string.Equals(item.WindowClassName, live.WindowClassName, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static IReadOnlyList<ParcelItem> Detect(Guid parcelId, CancellationToken cancellationToken)
     {
@@ -80,7 +81,7 @@ public sealed class OpenWindowService
                     if (executable is not null) { try { friendly = FileVersionInfo.GetVersionInfo(executable).FileDescription ?? processName; } catch (Exception exception) { AppLogger.LogTechnicalError(exception); } }
                 }
                 catch (Exception e) when (e is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return true; }
-                var candidate = new WindowCandidate(window, processId, title, processName, executable, friendly, true, (style & NativeMethods.WsExToolWindow) != 0, ReadClassName(window));
+                var candidate = new WindowCandidate(window, processId, title, processName, executable, true, (style & NativeMethods.WsExToolWindow) != 0, ReadClassName(window));
                 if (!ShouldInclude(candidate, ownPid) || !seenHandles.Add(window)) return true;
                 var normalizedExe = WindowsPathIdentity.Normalize(executable); var now = DateTime.Now;
                 found.Add(new ParcelItem
@@ -104,37 +105,18 @@ public sealed class OpenWindowService
         var text = new StringBuilder(Math.Min(length + 1, 4096)); NativeMethods.GetWindowText(window, text, text.Capacity); return text.ToString().Trim();
     }
 
-    private static int ScoreSavedItem(ParcelItem item, WindowCandidate live)
-    {
-        if (!ShouldInclude(live, (uint)Environment.ProcessId)) return 0;
-        var score = 0;
-        var savedExecutable = WindowsPathIdentity.Normalize(item.ExecutablePath ?? item.Value);
-        var liveExecutable = WindowsPathIdentity.Normalize(live.ExecutablePath);
-        if (!string.IsNullOrWhiteSpace(savedExecutable) && !string.IsNullOrWhiteSpace(liveExecutable) && string.Equals(savedExecutable, liveExecutable, StringComparison.OrdinalIgnoreCase)) score += 55;
-        else if (!string.IsNullOrWhiteSpace(savedExecutable) && string.Equals(Path.GetFileName(savedExecutable), Path.GetFileName(liveExecutable), StringComparison.OrdinalIgnoreCase)) score += 45;
-        if (!string.IsNullOrWhiteSpace(item.ProcessName) && string.Equals(item.ProcessName, live.ProcessName, StringComparison.OrdinalIgnoreCase)) score += 15;
-        var savedTitle = DeskMemoryLogic.NormalizeTitle(item.WindowTitle ?? item.DisplayName); var liveTitle = DeskMemoryLogic.NormalizeTitle(live.Title);
-        if (savedTitle.Length > 0 && savedTitle == liveTitle) score += 35;
-        else if (savedTitle.Length > 0 && liveTitle.Length > 0 && savedTitle.Split(' ').Intersect(liveTitle.Split(' '), StringComparer.OrdinalIgnoreCase).Any()) score += 10;
-        if (!string.IsNullOrWhiteSpace(item.WindowClassName) && string.Equals(item.WindowClassName, live.WindowClassName, StringComparison.OrdinalIgnoreCase)) score += 18;
-        return score;
-    }
-
-    private static string ExplainSavedItem(ParcelItem item, WindowCandidate live)
-    {
-        var signals = new List<string>();
-        if (string.Equals(WindowsPathIdentity.Normalize(item.ExecutablePath ?? item.Value), WindowsPathIdentity.Normalize(live.ExecutablePath), StringComparison.OrdinalIgnoreCase)) signals.Add("executable");
-        if (string.Equals(item.ProcessName, live.ProcessName, StringComparison.OrdinalIgnoreCase)) signals.Add("process");
-        if (DeskMemoryLogic.NormalizeTitle(item.WindowTitle ?? item.DisplayName) == DeskMemoryLogic.NormalizeTitle(live.Title)) signals.Add("title");
-        if (!string.IsNullOrWhiteSpace(item.WindowClassName) && string.Equals(item.WindowClassName, live.WindowClassName, StringComparison.OrdinalIgnoreCase)) signals.Add("window class");
-        return signals.Count == 0 ? "Matched by saved window identity." : $"Matched by {string.Join(", ", signals)}.";
-    }
 
     private static string? ReadClassName(nint window)
     {
         var text = new StringBuilder(256);
         return NativeMethods.GetClassName(window, text, text.Capacity) > 0 ? text.ToString() : null;
     }
+
+}
+
+internal static class WindowIdentity
+{
+    internal static string NormalizeTitle(string value) => string.Join(' ', (value ?? string.Empty).Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).ToUpperInvariant();
 }
 
 public enum ItemOpenStatus { Opened, AlreadyOpen, Missing, Failed, Unsupported, Skipped }
@@ -170,7 +152,7 @@ public sealed class ItemLaunchService
             if (item.ItemType != ParcelItemType.ApplicationWindow) return false;
             return currentWindows.Any(open =>
                 string.Equals(identity, WindowsPathIdentity.Normalize(open.ExecutablePath ?? open.Value), StringComparison.OrdinalIgnoreCase) &&
-                DeskMemoryLogic.NormalizeTitle(item.WindowTitle ?? item.DisplayName) == DeskMemoryLogic.NormalizeTitle(open.WindowTitle ?? open.DisplayName));
+                WindowIdentity.NormalizeTitle(item.WindowTitle ?? item.DisplayName) == WindowIdentity.NormalizeTitle(open.WindowTitle ?? open.DisplayName));
         }).ToList();
         var plan = BuildPlan(selectedItems.Except(alreadyOpen)); var inPlan = plan.Select(x => x.Id).ToHashSet(); var results = alreadyOpen.Select(item => new ItemOpenResult(item.Id, ItemOpenStatus.AlreadyOpen, "Application is already open")).ToList();
         foreach (var item in selectedItems.Where(item => !inPlan.Contains(item.Id)))
@@ -292,8 +274,9 @@ internal static partial class NativeMethods
 {
     internal const int GwlExStyle = -20;
     internal const long WsExToolWindow = 0x00000080L;
-    internal const long WsExTopmost = 0x00000008L;
     internal const uint WmClose = 0x0010;
+    internal const uint GetAncestorRoot = 2;
+    internal const uint GetWindowOwner = 4;
     internal delegate bool EnumWindowsProc(nint window, nint parameter);
 
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool EnumWindows(EnumWindowsProc callback, nint parameter);
@@ -302,6 +285,9 @@ internal static partial class NativeMethods
     [DllImport("user32.dll", EntryPoint = "GetWindowTextLengthW", CharSet = CharSet.Unicode)] internal static extern int GetWindowTextLength(nint window);
     [DllImport("user32.dll", EntryPoint = "GetWindowTextW", CharSet = CharSet.Unicode)] internal static extern int GetWindowText(nint window, StringBuilder text, int maximum);
     [DllImport("user32.dll")] internal static extern uint GetWindowThreadProcessId(nint window, out uint processId);
+    [DllImport("user32.dll")] internal static extern nint GetAncestor(nint window, uint flags);
+    [DllImport("user32.dll")] internal static extern nint GetWindow(nint window, uint command);
+    [DllImport("user32.dll", EntryPoint = "GetClassNameW", CharSet = CharSet.Unicode)] internal static extern int GetClassName(nint window, StringBuilder text, int maximum);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] private static extern nint GetWindowLongPtr64(nint window, int index);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongW")] private static extern int GetWindowLong32(nint window, int index);
     internal static nint GetWindowLongPtr(nint window, int index) => nint.Size == 8 ? GetWindowLongPtr64(window, index) : GetWindowLong32(window, index);

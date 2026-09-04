@@ -1,6 +1,6 @@
 # WorkParcel portable build
 
-1. Extract `WorkParcel-Portable-0.1.0-win-x64.zip` to a folder you control.
+1. Extract `WorkParcel-Portable-0.2.0-beta.1-win-x64.zip` to a folder you control.
 2. Open the extracted folder.
 3. Double-click `WorkParcel.exe`.
 

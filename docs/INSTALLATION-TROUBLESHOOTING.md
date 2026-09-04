@@ -2,13 +2,13 @@
 
 ## Windows warns about the installer
 
-Version 0.1.0 is not code-signed. Windows SmartScreen may therefore show an unfamiliar-app warning. Confirm that the file came from the release source, inspect **More info** and the displayed publisher/signature details, and decide whether you trust that specific file. Do not disable SmartScreen or antivirus protection. SHA-256 values are provided in `SHA256SUMS.txt`.
+WorkParcel 0.2.0 Beta is not code-signed. Windows SmartScreen may therefore show an unfamiliar-app warning. Confirm that the file came from the release source, inspect **More info** and the displayed publisher/signature details, and decide whether you trust that specific file. Do not disable SmartScreen or antivirus protection. SHA-256 values are provided in `SHA256SUMS.txt`.
 
 If Smart App Control or an enterprise Code Integrity policy requires signed executables, it may block this unsigned setup before its window appears. Use an approved signed build or ask the device administrator to apply the organization-approved exception; do not weaken Windows security controls just to run this build.
 
 ## The installer does not start
 
-Use a Windows x64 machine running Windows 10 version 1809 (build 17763) or later. The installer is per-user and normally installs to `%LOCALAPPDATA%\Programs\WorkParcel`; it should not require administrator access. If WorkParcel is open during an update, close it and retry.
+Use a Windows 10/11 x64 machine. Windows 10 version 1809 (build 17763) or later is required. The installer is per-user and normally installs to `%LOCALAPPDATA%\Programs\WorkParcel`; it should not require administrator access. If WorkParcel is open during an update, close it and retry.
 
 ## WorkParcel opens from the installer but not from a shortcut
 

@@ -89,7 +89,6 @@ public sealed partial class SettingsPage : PageBase
         body.Children.Add(Section("APPEARANCE", Appearance()));
         body.Children.Add(Section("LOCAL DATA", _data));
         body.Children.Add(Section("BROWSER TABS", BrowserTabs()));
-        body.Children.Add(Section("DESK MEMORY", DeskMemory()));
         body.Children.Add(Section("TAB PRIVACY", TabPrivacy()));
         body.Children.Add(Section("ABOUT", About()));
         SetContent(body);
@@ -127,7 +126,7 @@ public sealed partial class SettingsPage : PageBase
         var stack = Ui.Stack(10);
         stack.Children.Add(Ui.Text("Connect a browser so WorkParcel can show your open tabs when you capture a setup.", 12, false, "#8D9CA2"));
         _browser.Children.Clear();
-        _browser.Children.Add(Ui.Text("Checking browser connection…", 12, false, "#8D9CA2"));
+        _browser.Children.Add(Ui.Text("Checking browser connection...", 12, false, "#8D9CA2"));
         stack.Children.Add(_browser);
         return stack;
     }
@@ -183,7 +182,7 @@ public sealed partial class SettingsPage : PageBase
         if (state.State == BrowserConnectionState.Connected)
         {
             var checkedAt = details.LastConnectedUtc?.ToLocalTime().LocalDateTime;
-            card.Children.Add(Ui.Mono($"{details.TabCount} tabs available   ·   {details.WindowCount} browser windows found   ·   Last checked {Ui.Relative(checkedAt)}", 10, "#9BE28F"));
+            card.Children.Add(Ui.Mono($"{details.TabCount} tabs available   |   {details.WindowCount} browser windows found   |   Last checked {Ui.Relative(checkedAt)}", 10, "#9BE28F"));
         }
 
         var actions = Ui.Row();
@@ -245,7 +244,7 @@ public sealed partial class SettingsPage : PageBase
         AddDetail(stack, "Browser installed", info.BrowserInstalled ? "Yes" : "No");
         AddDetail(stack, "Extension detected", info.ExtensionDetected ? "Yes" : "Not detected");
         AddDetail(stack, "Desktop connection", info.HostInstalled ? "Registered" : "Not registered");
-        AddDetail(stack, "Protocol status", info.ProtocolVersion == 0 ? "Not detected" : $"v{info.ProtocolVersion} — {(info.ProtocolCompatible ? "compatible" : "incompatible")}");
+        AddDetail(stack, "Protocol status", info.ProtocolVersion == 0 ? "Not detected" : $"v{info.ProtocolVersion} - {(info.ProtocolCompatible ? "compatible" : "incompatible")}");
         AddDetail(stack, "Extension version", info.ExtensionVersion ?? "Not detected");
         AddDetail(stack, "Registered extension IDs", HostRegistrationService.GetRegisteredExtensionIds(browser) ?? "Not available");
         AddDetail(stack, "Connection ID", info.ConnectionId ?? "Not connected");
@@ -589,33 +588,6 @@ public sealed partial class SettingsPage : PageBase
         return null;
     }
 
-    private UIElement DeskMemory()
-    {
-        var current = Store.DeskMemorySettings;
-        var restore = new CheckBox { Content = "RESTORE DESK MEMORY BY DEFAULT WHEN OPENING", IsChecked = current.RestoreByDefault };
-        var review = new CheckBox { Content = "REVIEW MATCHES BEFORE APPLYING A LAYOUT", IsChecked = current.ReviewBeforeApplying };
-        var reuse = new CheckBox { Content = "REUSE STRONGLY MATCHED WINDOWS THAT ARE ALREADY OPEN", IsChecked = current.ReuseMatchingOpenWindows };
-        var maximized = new CheckBox { Content = "RESTORE MAXIMIZED WINDOWS", IsChecked = current.RestoreMaximized };
-        var minimized = new CheckBox { Content = "RESTORE MINIMIZED WINDOWS", IsChecked = current.RestoreMinimized };
-        var preview = new CheckBox { Content = "SHOW A LAYOUT PREVIEW DURING OPEN", IsChecked = current.ShowPreviewDuringOpen };
-        var undo = new CheckBox { Content = "KEEP IN-MEMORY UNDO FOR WINDOW MOVES", IsChecked = current.EnableUndo };
-        var timeout = new NumberBox { Header = "RESTORE TIMEOUT (SECONDS)", Value = current.RestorationTimeoutSeconds, Minimum = 2, Maximum = 120, SmallChange = 1, LargeChange = 5, Width = 230 };
-        var save = Ui.Button("SAVE DESK MEMORY SETTINGS", true);
-        save.Click += async (_, _) =>
-        {
-            try
-            {
-                await Store.SetDeskMemorySettingsAsync(new DeskMemorySettings(restore.IsChecked == true, review.IsChecked == true, reuse.IsChecked == true, maximized.IsChecked == true, minimized.IsChecked == true, preview.IsChecked == true, undo.IsChecked == true, (int)Math.Round(timeout.Value)));
-                save.Content = Ui.Mono("SAVED", 11, "#0B0E10", true);
-            }
-            catch (Exception exception) { AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "SETTINGS NOT SAVED", "The previous Desk Memory settings remain active."); }
-        };
-        var stack = Ui.Stack(6);
-        stack.Children.Add(Ui.Text("Desk Memory stores monitor and window-placement metadata locally. It never stores HWNDs, process IDs, screenshots or application contents.", 12, false, "#8D9CA2"));
-        stack.Children.Add(restore); stack.Children.Add(review); stack.Children.Add(reuse); stack.Children.Add(maximized); stack.Children.Add(minimized); stack.Children.Add(preview); stack.Children.Add(undo); stack.Children.Add(timeout); stack.Children.Add(save);
-        return stack;
-    }
-
     private UIElement TabPrivacy()
     {
         var service = BrowserIntegrationService.Current;
@@ -644,7 +616,7 @@ public sealed partial class SettingsPage : PageBase
 
     private async Task ShowWhatStoresAsync()
     {
-        await Dialogs.ShowMessage(this, "WHAT WORKPARCEL STORES", "WorkParcel may store:\n• Tab title\n• URL\n• Browser type\n• Tab order\n• Pinned state\n• Browser-window grouping\n• Window position needed for restoration\n\nWorkParcel does not intentionally store:\n• Passwords\n• Cookies\n• Form contents\n• Page contents\n• Keystrokes\n• Full browser history");
+        await Dialogs.ShowMessage(this, "WHAT WORKPARCEL STORES", "WorkParcel may store:\n- Tab title\n- URL\n- Browser type\n- Tab order\n- Pinned state\n- Browser-window grouping\n\nWorkParcel does not intentionally store:\n- Passwords\n- Cookies\n- Form contents\n- Page contents\n- Keystrokes\n- Full browser history");
     }
 
     private async Task ClearIconCacheAsync()
@@ -663,7 +635,7 @@ public sealed partial class SettingsPage : PageBase
     {
         var stack = Ui.Stack(4);
         stack.Children.Add(Ui.Text("WorkParcel", 14, true));
-        stack.Children.Add(Ui.Mono($"VERSION {typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.1.0"}", 10));
+        stack.Children.Add(Ui.Mono($"VERSION {typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.2.0"}", 10));
         stack.Children.Add(Ui.Mono("LOCAL PARCEL UTILITY", 10));
         stack.Children.Add(Ui.Text("Save a setup. Open it when you return.", 12, false, "#8D9CA2"));
         return stack;

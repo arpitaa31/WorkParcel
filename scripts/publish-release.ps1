@@ -12,7 +12,6 @@ $solutionPath = Join-Path $repoRoot 'WorkParcel.slnx'
 $appProjectPath = Join-Path $repoRoot 'src\WorkParcel.App\WorkParcel.App.csproj'
 $hostProjectPath = Join-Path $repoRoot 'src\WorkParcel.BrowserHost\WorkParcel.BrowserHost.csproj'
 $extensionSource = Join-Path $repoRoot 'browser-extension'
-$releaseNotesSource = Join-Path $repoRoot 'docs\RELEASE-NOTES-0.1.0.md'
 $browserGuideSource = Join-Path $repoRoot 'docs\BROWSER-EXTENSION-SETUP.md'
 $troubleshootingSource = Join-Path $repoRoot 'docs\INSTALLATION-TROUBLESHOOTING.md'
 $portableReadmeSource = Join-Path $repoRoot 'docs\PORTABLE-README.md'
@@ -59,24 +58,27 @@ function Get-InnoSetupCompiler {
 if (-not (Test-Path -LiteralPath $propsPath -PathType Leaf)) { throw "Version source not found: $propsPath" }
 [xml]$props = Get-Content -LiteralPath $propsPath -Raw
 $version = [string]$props.Project.PropertyGroup.VersionPrefix
+$releaseVersion = [string]$props.Project.PropertyGroup.ReleaseVersion
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Directory.Build.props must contain a three-part VersionPrefix; found '$version'." }
+if ($releaseVersion -ne '0.2.0-beta.1') { throw "This release script is for 0.2.0-beta.1; found '$releaseVersion'." }
+$releaseNotesSource = Join-Path $repoRoot ("docs\RELEASE-NOTES-{0}.md" -f $version)
 
 foreach ($requiredPath in @($solutionPath, $appProjectPath, $hostProjectPath, $extensionSource, $releaseNotesSource, $browserGuideSource, $troubleshootingSource, $portableReadmeSource)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Required release input is missing: $requiredPath" }
 }
 
-$releaseRoot = Join-Path $repoRoot ("artifacts\release\{0}" -f $version)
+$releaseRoot = Join-Path $repoRoot ("artifacts\release\{0}" -f $releaseVersion)
 $stagingRoot = Join-Path $releaseRoot 'staging'
 $installerStage = Join-Path $stagingRoot 'installer'
-$portableStage = Join-Path $stagingRoot ("WorkParcel-Portable-{0}-win-x64" -f $version)
+$portableStage = Join-Path $stagingRoot ("WorkParcel-Portable-{0}-win-x64" -f $releaseVersion)
 $extensionStage = Join-Path $stagingRoot 'browser-extension'
 $appPublish = Join-Path $stagingRoot 'app-publish'
 $hostPublish = Join-Path $stagingRoot 'host-publish'
-$portableZip = Join-Path $releaseRoot ("WorkParcel-Portable-{0}-win-x64.zip" -f $version)
-$extensionZip = Join-Path $releaseRoot ("WorkParcel-Browser-Extension-{0}.zip" -f $version)
-$installerArtifact = Join-Path $releaseRoot ("WorkParcel-Setup-{0}.exe" -f $version)
+$portableZip = Join-Path $releaseRoot ("WorkParcel-Portable-{0}-win-x64.zip" -f $releaseVersion)
+$extensionZip = Join-Path $releaseRoot ("WorkParcel-Browser-Extension-{0}.zip" -f $releaseVersion)
+$installerArtifact = Join-Path $releaseRoot ("WorkParcel-Setup-{0}.exe" -f $releaseVersion)
 $checksumPath = Join-Path $releaseRoot 'SHA256SUMS.txt'
-$releaseNotesArtifact = Join-Path $releaseRoot ("RELEASE_NOTES-{0}.md" -f $version)
+$releaseNotesArtifact = Join-Path $releaseRoot ("RELEASE_NOTES-{0}.md" -f $releaseVersion)
 $browserGuideArtifact = Join-Path $releaseRoot 'BROWSER-EXTENSION-SETUP.md'
 $troubleshootingArtifact = Join-Path $releaseRoot 'INSTALLATION-TROUBLESHOOTING.md'
 
@@ -86,8 +88,8 @@ New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
 
 $dotnet = (Get-Command dotnet.exe -ErrorAction Stop).Source
 Invoke-RequiredCommand $dotnet @('restore', $solutionPath, '-r', 'win-x64')
-Invoke-RequiredCommand $dotnet @('test', $solutionPath, '-c', 'Release', '--no-restore')
 Invoke-RequiredCommand $dotnet @('build', $solutionPath, '-c', 'Release', '--no-restore')
+Invoke-RequiredCommand $dotnet @('test', $solutionPath, '-c', 'Release', '--no-restore')
 
 New-Item -ItemType Directory -Path $appPublish, $hostPublish -Force | Out-Null
 $publishCommon = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--no-restore', '-p:Platform=x64', '-p:WindowsPackageType=None', '-p:EnableMsixTooling=false', '-p:EnableWinAppRunSupport=false', '-p:WindowsAppSDKSelfContained=true', '-p:PublishSingleFile=false', '-p:PublishReadyToRun=false', '-p:PublishTrimmed=false', '-p:DebugType=None', '-p:DebugSymbols=false')
@@ -98,7 +100,7 @@ Assert-File (Join-Path $appPublish 'WorkParcel.exe')
 Assert-File (Join-Path $appPublish 'Assets\AppIcon.ico')
 Assert-File (Join-Path $hostPublish 'WorkParcel.BrowserHost.exe')
 
-# The installer stage mirrors the installed layout. It contains binaries and
+# The installer stage mirrors the installed package contents. It contains binaries and
 # user-facing support files only; no source, database, logs, or build cache.
 New-Item -ItemType Directory -Path $installerStage, (Join-Path $installerStage 'App'), (Join-Path $installerStage 'BrowserHost'), (Join-Path $installerStage 'Documentation') -Force | Out-Null
 Copy-DirectoryContents $appPublish (Join-Path $installerStage 'App')
@@ -115,7 +117,7 @@ foreach ($doc in @(@{Source=$browserGuideSource; Name='Browser-Extension-Setup.m
     Copy-Item -LiteralPath $doc.Source -Destination (Join-Path $installerStage ("Documentation\{0}" -f $doc.Name)) -Force
 }
 
-# Portable layout: WorkParcel.exe is at the extraction root and supporting
+# Portable package: WorkParcel.exe is at the extraction root and supporting
 # files remain alongside it. User data still goes to Local AppData.
 New-Item -ItemType Directory -Path $portableStage, (Join-Path $portableStage 'BrowserHost'), (Join-Path $portableStage 'browser-extension'), (Join-Path $portableStage 'Documentation') -Force | Out-Null
 Copy-DirectoryContents $appPublish $portableStage
@@ -141,10 +143,10 @@ Copy-Item -LiteralPath $troubleshootingSource -Destination $troubleshootingArtif
 $inno = if ($SkipInstaller) { $null } else { Get-InnoSetupCompiler }
 if ($null -ne $inno) {
     $issPath = Join-Path $repoRoot 'installer\WorkParcel.iss'
-    Invoke-RequiredCommand $inno @($issPath, "/DAppVersion=$version")
+    Invoke-RequiredCommand $inno @($issPath, "/DAppVersion=$version", "/DReleaseLabel=$releaseVersion", "/DStageDir=$installerStage", "/DReleaseDir=$releaseRoot")
     Assert-File $installerArtifact
 } else {
-    Write-Warning 'Inno Setup compiler was not found. Portable and browser-extension artifacts were created; install Inno Setup and rerun this script to create WorkParcel-Setup-0.1.0.exe.'
+    Write-Warning ("Inno Setup compiler was not found. Portable and browser-extension artifacts were created; install Inno Setup and rerun this script to create {0}." -f $installerArtifact)
 }
 
 foreach ($archivePath in @($portableZip, $extensionZip)) {

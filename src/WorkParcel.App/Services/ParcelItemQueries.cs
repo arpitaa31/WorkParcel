@@ -3,7 +3,7 @@ using WorkParcel_App.Models;
 namespace WorkParcel_App.Services;
 
 public enum ParcelItemGroup { All, AppsAndWindows, Links, Files, Folders, Notes, BrowserTabs, ChromeTabs, EdgeTabs }
-public enum ParcelItemSort { DateAdded, Name, Type, SavedPosition }
+public enum ParcelItemSort { DateAdded, Name, Type, TabOrder }
 public sealed record ParcelItemQuery(string? Search = null, ParcelItemGroup Group = ParcelItemGroup.All, ParcelItemSort Sort = ParcelItemSort.DateAdded);
 
 public static class ParcelItemQueries
@@ -31,7 +31,7 @@ public static class ParcelItemQueries
         {
             ParcelItemSort.Name => items.OrderBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase).ToList(),
             ParcelItemSort.Type => items.OrderBy(item => item.ItemType).ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase).ToList(),
-            ParcelItemSort.SavedPosition => items.OrderBy(item => item.BrowserFamily).ThenBy(item => item.BrowserWindowGroupId).ThenBy(item => item.BrowserTabIndex ?? int.MaxValue).ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase).ToList(),
+            ParcelItemSort.TabOrder => items.OrderBy(item => item.BrowserFamily).ThenBy(item => item.BrowserWindowGroupId).ThenBy(item => item.BrowserTabIndex ?? int.MaxValue).ThenBy(item => item.DisplayName, StringComparer.OrdinalIgnoreCase).ToList(),
             _ => items.OrderBy(item => item.SortOrder).ThenBy(item => item.CreatedAt).ToList()
         };
     }

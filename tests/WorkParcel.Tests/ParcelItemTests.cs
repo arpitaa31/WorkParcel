@@ -69,10 +69,10 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
             await factory.FileAsync(Guid.Empty, source, 0), factory.Folder(Guid.Empty, folder, 1), factory.Application(Guid.Empty, app, 2),
             factory.WebLink(Guid.Empty, "https://example.com/a?q=1", "Example", null, 3), factory.Note(Guid.Empty, "Remember", "Do the careful thing", 4),
             new() { ParcelId=Guid.Empty, ItemType=ParcelItemType.ApplicationWindow, DisplayName="Disposable window", Value=app, NormalizedIdentity="window|disposable", ExecutablePath=app, WindowTitle="Disposable window", WindowClassName="TestWindow", ProcessName="tiny", CreatedAt=DateTime.Now, UpdatedAt=DateTime.Now, SortOrder=5, CloseSupported=true },
-            new() { ParcelId=Guid.Empty, ItemType=ParcelItemType.BrowserTab, DisplayName="Docs tab", Value="https://example.com/docs", NormalizedIdentity="chrome|window-0|https://example.com/docs", BrowserFamily="chrome", BrowserDomain="example.com", BrowserWindowGroupId="window-0", BrowserTabIndex=0, BrowserCapturedAt=DateTime.Now, BrowserWindowLeft=120, BrowserWindowTop=80, BrowserWindowWidth=1400, BrowserWindowHeight=900, BrowserWindowState="normal", BrowserWindowFocused=true, BrowserWindowDpiX=144, BrowserWindowDpiY=144, CreatedAt=DateTime.Now, UpdatedAt=DateTime.Now, SortOrder=6 }
+            new() { ParcelId=Guid.Empty, ItemType=ParcelItemType.BrowserTab, DisplayName="Docs tab", Value="https://example.com/docs", NormalizedIdentity="chrome|window-0|https://example.com/docs", BrowserFamily="chrome", BrowserDomain="example.com", BrowserWindowGroupId="window-0", BrowserTabIndex=0, BrowserCapturedAt=DateTime.Now, CreatedAt=DateTime.Now, UpdatedAt=DateTime.Now, SortOrder=6 }
         };
         var parcel = await store.CreateWithItemsAsync("Real setup", "all types", items); Assert.Equal(7, parcel.ItemCount); Assert.Contains("2 APPS", parcel.ItemSummary);
-        var restarted = await Store(temp.Path); var loaded = Assert.Single(restarted.Parcels); Assert.Equal(7, loaded.ItemCount); Assert.Equal(7, loaded.Items.Select(item => item.ItemType).Distinct().Count()); Assert.Equal("Do the careful thing", loaded.Items.Single(item => item.ItemType == ParcelItemType.Note).NoteContent); Assert.Equal("window-0", loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab).BrowserWindowGroupId); Assert.Equal("example.com", loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab).BrowserDomain); var loadedBrowser = loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab); Assert.Equal(120, loadedBrowser.BrowserWindowLeft); Assert.Equal(144, loadedBrowser.BrowserWindowDpiX); Assert.True(loadedBrowser.BrowserWindowFocused); Assert.Equal("TestWindow", loaded.Items.Single(item => item.ItemType == ParcelItemType.ApplicationWindow).WindowClassName);
+        var restarted = await Store(temp.Path); var loaded = Assert.Single(restarted.Parcels); Assert.Equal(7, loaded.ItemCount); Assert.Equal(7, loaded.Items.Select(item => item.ItemType).Distinct().Count()); Assert.Equal("Do the careful thing", loaded.Items.Single(item => item.ItemType == ParcelItemType.Note).NoteContent); Assert.Equal("window-0", loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab).BrowserWindowGroupId); Assert.Equal("example.com", loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab).BrowserDomain); Assert.Equal("TestWindow", loaded.Items.Single(item => item.ItemType == ParcelItemType.ApplicationWindow).WindowClassName);
     }
 
     [Fact]
@@ -443,12 +443,32 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
     [Fact]
     public void WindowFilteringExcludesOwnProcessToolWindowsAndSystemNoise()
     {
-        Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(1, 42, "WorkParcel", "WorkParcel.App", null, "WorkParcel", true, false), 42));
-        Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(2, 7, "Search", "SearchHost", null, "Search", true, false), 42));
-        Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(3, 9, "Tool", "tool", null, "Tool", true, true), 42));
-        Assert.True(OpenWindowService.ShouldInclude(new WindowCandidate(5, 12, "Chrome", "chrome", @"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", "Google Chrome", true, false), 42));
-        Assert.True(OpenWindowService.ShouldInclude(new WindowCandidate(6, 13, "Edge", "msedge", @"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", "Microsoft Edge", true, false), 42));
-        Assert.True(OpenWindowService.ShouldInclude(new WindowCandidate(4, 11, "notes.txt - Notepad", "notepad", @"C:\Windows\notepad.exe", "Notepad", true, false), 42));
+        Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(1, 42, "WorkParcel", "WorkParcel.App", null, true, false), 42));
+        Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(2, 7, "Search", "SearchHost", null, true, false), 42));
+        Assert.False(OpenWindowService.ShouldInclude(new WindowCandidate(3, 9, "Tool", "tool", null, true, true), 42));
+        Assert.True(OpenWindowService.ShouldInclude(new WindowCandidate(5, 12, "Chrome", "chrome", @"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", true, false), 42));
+        Assert.True(OpenWindowService.ShouldInclude(new WindowCandidate(6, 13, "Edge", "msedge", @"C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", true, false), 42));
+        Assert.True(OpenWindowService.ShouldInclude(new WindowCandidate(4, 11, "notes.txt - Notepad", "notepad", @"C:\Windows\notepad.exe", true, false), 42));
+    }
+
+    [Fact]
+    public void WindowIdentityMatchingRequiresOneUniqueExactIdentity()
+    {
+        var saved = new ParcelItem
+        {
+            ItemType = ParcelItemType.ApplicationWindow,
+            DisplayName = "notes.txt - Notepad",
+            WindowTitle = "notes.txt - Notepad",
+            ProcessName = "notepad",
+            ExecutablePath = @"C:\Windows\notepad.exe",
+            WindowClassName = "Notepad"
+        };
+        var exact = new WindowCandidate(5, 11, " notes.txt - Notepad ", "notepad", @"c:\windows\NOTEPAD.EXE", true, false, "Notepad");
+        var wrongTitle = new WindowCandidate(6, 12, "other.txt - Notepad", "notepad", @"C:\Windows\notepad.exe", true, false, "Notepad");
+        Assert.Same(exact, Assert.Single(OpenWindowService.MatchSavedItemsByIdentity(new[] { saved }, new[] { exact, wrongTitle })).Live);
+
+        var duplicate = new WindowCandidate(7, 13, "notes.txt - Notepad", "notepad", @"C:\Windows\notepad.exe", true, false, "Notepad");
+        Assert.Null(Assert.Single(OpenWindowService.MatchSavedItemsByIdentity(new[] { saved }, new[] { exact, duplicate })).Live);
     }
 
     [Fact]
@@ -502,7 +522,7 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
     public async Task ReplacingPackSelectionPersistsAddsAndRemovalsAcrossRestart()
     {
         using var temp = new TestFolder(); var store = await Store(temp.Path); var factory = new ParcelItemFactory(); var firstPath = temp.File("first.txt", "1"); var secondPath = temp.File("second.txt", "2"); var parcel = await store.CreateWithItemsAsync("Pack", "", new[] { await factory.FileAsync(Guid.Empty, firstPath, 0), await factory.FileAsync(Guid.Empty, secondPath, 1) });
-        var keep = parcel.Items[1]; var link = factory.WebLink(parcel.Id, "https://example.com/new", null, null, 2); await store.ReplaceItemsAsync(parcel, new[] { keep, link }, "Parcel packed — 2 items saved");
+        var keep = parcel.Items[1]; var link = factory.WebLink(parcel.Id, "https://example.com/new", null, null, 2); await store.ReplaceItemsAsync(parcel, new[] { keep, link }, "Parcel packed - 2 items saved");
         var restarted = await Store(temp.Path); var loaded = Assert.Single(restarted.Parcels); Assert.Equal(2, loaded.ItemCount); Assert.DoesNotContain(loaded.Items, item => item.Value == firstPath); Assert.Contains(loaded.Items, item => item.ItemType == ParcelItemType.WebLink);
     }
 
@@ -731,6 +751,55 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
     public async Task BrowserProtocolFramingHandlesPartialReads()
     {
         var payload = BrowserProtocol.Serialize(BrowserProtocol.Create("ping", "partial", "edge", new { value = 1 })); await using var stream = new MemoryStream(); await BrowserProtocol.WriteFrameAsync(stream, payload); stream.Position = 0; var framed = await BrowserProtocol.ReadFrameAsync(new ChunkedReadStream(stream, 2)); Assert.Equal(payload, framed);
+    }
+
+    [Fact]
+    public async Task NewParcelsStayOpenAndRetainDataWhenObsoleteTablesExist()
+    {
+        using var temp = new TestFolder();
+        var store = await Store(temp.Path);
+        var item = new ParcelItem { ItemType = ParcelItemType.Note, DisplayName = "Keep this", Value = "Keep this", NoteContent = "Keep this", LaunchEnabled = false };
+        var parcel = await store.CreateWithItemsAsync("Open setup", "", new[] { item });
+        Assert.Equal(ParcelStatus.Open, parcel.Status);
+
+        var oldSnapshotTable = string.Concat("D", "esk", "L", "ayout", "S", "napshots");
+        var oldWindowTable = string.Concat("D", "esk", "W", "indow", "L", "ayout", "s");
+        await using (var db = new SqliteConnection($"Data Source={temp.Path}\\Data\\workparcel.db"))
+        {
+            await db.OpenAsync();
+            var count = db.CreateCommand();
+            count.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ($snapshot, $window);";
+            count.Parameters.AddWithValue("$snapshot", oldSnapshotTable);
+            count.Parameters.AddWithValue("$window", oldWindowTable);
+            Assert.Equal(0L, await count.ExecuteScalarAsync());
+
+            var legacyColumns = new[]
+            {
+                (Name: string.Concat("Browser", "Window", "Left"), SqlType: "REAL"),
+                (Name: string.Concat("Browser", "Window", "Top"), SqlType: "REAL"),
+                (Name: string.Concat("Browser", "Window", "Width"), SqlType: "REAL"),
+                (Name: string.Concat("Browser", "Window", "Height"), SqlType: "REAL"),
+                (Name: string.Concat("Browser", "Window", "State"), SqlType: "TEXT"),
+                (Name: string.Concat("Browser", "Window", "Focused"), SqlType: "INTEGER"),
+                (Name: string.Concat("Browser", "Window", "DpiX"), SqlType: "REAL"),
+                (Name: string.Concat("Browser", "Window", "DpiY"), SqlType: "REAL")
+            };
+            var legacyColumnSql = string.Join(" ", legacyColumns.Select(column => $"ALTER TABLE ParcelItems ADD COLUMN [{column.Name}] {column.SqlType};"));
+            var addLegacy = db.CreateCommand();
+            addLegacy.CommandText = $"CREATE TABLE [{oldSnapshotTable}](Id TEXT PRIMARY KEY); CREATE TABLE [{oldWindowTable}](Id TEXT PRIMARY KEY); {legacyColumnSql} INSERT INTO ParcelHistory(Id, ParcelId, EventType, Summary, Timestamp) VALUES($id, $parcel, $eventType, $summary, $timestamp);";
+            addLegacy.Parameters.AddWithValue("$id", Guid.NewGuid().ToString());
+            addLegacy.Parameters.AddWithValue("$parcel", parcel.Id.ToString());
+            addLegacy.Parameters.AddWithValue("$eventType", "HistoricalEventV0");
+            addLegacy.Parameters.AddWithValue("$summary", "Legacy history retained");
+            addLegacy.Parameters.AddWithValue("$timestamp", DateTime.UtcNow.ToString("O"));
+            await addLegacy.ExecuteNonQueryAsync();
+        }
+
+        var restarted = await Store(temp.Path);
+        var loaded = Assert.Single(restarted.Parcels);
+        Assert.Equal(ParcelStatus.Open, loaded.Status);
+        Assert.Equal("Keep this", Assert.Single(loaded.Items).NoteContent);
+        Assert.Contains(loaded.History, entry => entry.Summary == "Legacy history retained" && entry.EventType == ParcelHistoryEventType.Updated);
     }
 
     private static async Task<WorkspaceStore> Store(string root) { var store = new WorkspaceStore(new AppDataPaths(root)); await store.InitializeAsync(); return store; }

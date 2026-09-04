@@ -1,6 +1,6 @@
 # WorkParcel browser-extension setup
 
-The WorkParcel Chromium bridge is optional. WorkParcel remains fully usable for files, folders, applications, links, notes, parcels, Today tasks, Archive, and Restore without it. The extension is not published in the Chrome Web Store or Microsoft Edge Add-ons in version 0.1.0.
+The WorkParcel Chromium bridge is optional and is required only for browser-tab integration. WorkParcel remains fully usable for files, folders, applications, links, notes, parcels, Today tasks, Archive, and Restore without it. The extension is not published in the Chrome Web Store or Microsoft Edge Add-ons for the 0.2.0 Beta release. The release asset is `WorkParcel-Browser-Extension-0.2.0-beta.1.zip`.
 
 ## Install the optional extension
 

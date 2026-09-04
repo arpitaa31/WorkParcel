@@ -1,6 +1,6 @@
 namespace WorkParcel.Core.Browser;
 
-public sealed record BrowserRestoreItem(string ItemKey, string Browser, string WindowGroup, string Url, int Position, bool Pinned, bool Active, string? GroupTitle, string? GroupColor);
+public sealed record BrowserRestoreItem(string ItemKey, string Browser, string WindowGroup, string Url, int TabIndex, bool Pinned, bool Active, string? GroupTitle, string? GroupColor);
 public sealed record BrowserOpenIdentity(string Browser, string WindowGroup, string Url);
 public sealed record BrowserRestorePlanItem(BrowserRestoreItem Item, string Status, string Message);
 public sealed record BrowserRestorePlan(IReadOnlyList<BrowserRestorePlanItem> Items)
@@ -16,7 +16,7 @@ public static class BrowserRestorePlanner
     {
         var open = new HashSet<string>(alreadyOpen.Select(item => BrowserTabRules.Identity(item.Browser, item.WindowGroup, item.Url)), StringComparer.Ordinal);
         var plan = new List<BrowserRestorePlanItem>();
-        foreach (var item in savedItems.OrderBy(item => item.Browser, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.WindowGroup, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.Position).ThenBy(item => item.ItemKey, StringComparer.Ordinal))
+        foreach (var item in savedItems.OrderBy(item => item.Browser, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.WindowGroup, StringComparer.OrdinalIgnoreCase).ThenBy(item => item.TabIndex).ThenBy(item => item.ItemKey, StringComparer.Ordinal))
         {
             if (!BrowserTabRules.TryGetRestorableUri(item.Url, out _)) { plan.Add(new(item, "Unsupported", "Only HTTP and HTTPS tabs can be restored.")); continue; }
             var identity = BrowserTabRules.Identity(item.Browser, item.WindowGroup, item.Url);

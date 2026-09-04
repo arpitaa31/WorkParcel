@@ -26,11 +26,7 @@ public enum ParcelHistoryEventType
     ItemRemoved,
     ItemRelinked,
     ChangedFileAccepted,
-    CloseRequested,
-    DeskLayoutCaptured,
-    DeskLayoutUpdated,
-    DeskLayoutRestored,
-    DeskLayoutRemoved
+    CloseRequested
 }
 
 public enum ParcelItemType
@@ -49,8 +45,6 @@ public sealed class Parcel : BindableBase
     private string _name = string.Empty;
     private string _description = string.Empty;
     private ParcelStatus _status = ParcelStatus.Packed;
-    private DeskLayoutSnapshot? _deskLayout;
-
     public Parcel() => Items.CollectionChanged += Items_CollectionChanged;
 
     public Guid Id { get; init; } = Guid.NewGuid();
@@ -63,7 +57,6 @@ public sealed class Parcel : BindableBase
     public DateTime? LastPackedAt { get; set; }
     public DateTime? ArchivedAt { get; set; }
     public ParcelStatus? PreviousStatus { get; set; }
-    public DeskLayoutSnapshot? DeskLayout { get => _deskLayout; set => Set(ref _deskLayout, value); }
     public ObservableCollection<ParcelItem> Items { get; } = new();
     public int ItemCount => Items.Count;
     public int AvailableItemCount => Items.Count(item => !item.IsMissing && !item.IsInaccessible);
@@ -152,14 +145,6 @@ public sealed class ParcelItem : BindableBase
     public string? BrowserSessionTabId { get; set; }
     public string? BrowserSessionWindowId { get; set; }
     public string? BrowserConnectionId { get; set; }
-    public int? BrowserWindowLeft { get; set; }
-    public int? BrowserWindowTop { get; set; }
-    public int? BrowserWindowWidth { get; set; }
-    public int? BrowserWindowHeight { get; set; }
-    public string? BrowserWindowState { get; set; }
-    public bool BrowserWindowFocused { get; set; }
-    public int? BrowserWindowDpiX { get; set; }
-    public int? BrowserWindowDpiY { get; set; }
 
     // Current window identity only. Never written to the database.
     public nint RuntimeWindowHandle { get; set; }

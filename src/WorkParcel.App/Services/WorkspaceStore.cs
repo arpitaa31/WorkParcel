@@ -1,5 +1,4 @@
 using System.Collections.ObjectModel;
-using System.Text.Json;
 using WorkParcel_App.Models;
 
 namespace WorkParcel_App.Services;
@@ -22,7 +21,6 @@ public sealed class WorkspaceStore : BindableBase
     private Parcel? _currentParcel;
     private int _parcelCount;
     private int _todayItemCount;
-    private DeskMemorySettings _deskMemorySettings = DeskMemorySettings.SafeDefaults;
 
     public static WorkspaceStore Current => _current.Value;
 
@@ -44,7 +42,6 @@ public sealed class WorkspaceStore : BindableBase
     public string Theme { get => _theme; set => Set(ref _theme, value); }
     public int ParcelCount { get => _parcelCount; private set => Set(ref _parcelCount, value); }
     public int TodayItemCount { get => _todayItemCount; private set => Set(ref _todayItemCount, value); }
-    public DeskMemorySettings DeskMemorySettings { get => _deskMemorySettings; private set => Set(ref _deskMemorySettings, value); }
     public long DatabaseSize => _repository.GetDatabaseSize();
     public DateTime? LastSuccessfulInitializationUtc => _initializer.LastSuccessfulInitializationUtc;
     public string DatabaseStatus => _initialized ? "READY" : "NOT INITIALIZED";
@@ -60,12 +57,6 @@ public sealed class WorkspaceStore : BindableBase
             ReplaceSnapshot(snapshot);
             var savedTheme = await _repository.GetSettingAsync("Theme", cancellationToken);
             if (savedTheme is "Dark" or "Light" or "System") _theme = savedTheme;
-            var savedDeskMemorySettings = await _repository.GetSettingAsync(DeskMemorySettings.SettingKey, cancellationToken);
-            if (!string.IsNullOrWhiteSpace(savedDeskMemorySettings))
-            {
-                try { DeskMemorySettings = JsonSerializer.Deserialize<DeskMemorySettings>(savedDeskMemorySettings) ?? DeskMemorySettings.SafeDefaults; }
-                catch (JsonException) { DeskMemorySettings = DeskMemorySettings.SafeDefaults; }
-            }
             _initialized = true;
             OnPropertyChanged(nameof(DatabaseStatus));
         }
@@ -98,15 +89,14 @@ public sealed class WorkspaceStore : BindableBase
         return parcel;
     }
 
-    public async Task<Parcel> CreateWithItemsAsync(string name, string description, IReadOnlyList<ParcelItem> items, CancellationToken cancellationToken = default, DeskLayoutSnapshot? deskLayout = null, Guid? parcelId = null)
+    public async Task<Parcel> CreateWithItemsAsync(string name, string description, IReadOnlyList<ParcelItem> items, CancellationToken cancellationToken = default)
     {
         var cleanName = ValidateName(name); var cleanDescription = ValidateDescription(description); var now = DateTime.Now;
-        var parcel = new Parcel { Id = parcelId ?? Guid.NewGuid(), Name = cleanName, Description = cleanDescription, Status = ParcelStatus.Packed, CreatedAt = now, UpdatedAt = now, LastPackedAt = now };
+        var parcel = new Parcel { Name = cleanName, Description = cleanDescription, Status = ParcelStatus.Open, CreatedAt = now, UpdatedAt = now, LastOpenedAt = now };
         var prepared = PrepareItems(parcel, items, Array.Empty<ParcelItem>());
-        if (deskLayout is not null) PrepareDeskLayout(parcel, deskLayout);
-        var history = NewHistory(parcel, ParcelHistoryEventType.ItemsCaptured, $"Parcel packed — {prepared.Count} item{(prepared.Count == 1 ? string.Empty : "s")} saved");
-        await _repository.InsertParcelWithItemsAsync(parcel, prepared, history, cancellationToken, deskLayout);
-        foreach (var item in prepared) parcel.Items.Add(item); parcel.DeskLayout = deskLayout; parcel.History.Add(history); Parcels.Insert(0, parcel); ParcelCount++;
+        var history = NewHistory(parcel, ParcelHistoryEventType.ItemsCaptured, $"Parcel created — {prepared.Count} item{(prepared.Count == 1 ? string.Empty : "s")} saved");
+        await _repository.InsertParcelWithItemsAsync(parcel, prepared, history, cancellationToken);
+        foreach (var item in prepared) parcel.Items.Add(item); parcel.History.Add(history); Parcels.Insert(0, parcel); ParcelCount++;
         return parcel;
     }
 
@@ -161,69 +151,29 @@ public sealed class WorkspaceStore : BindableBase
         finally { _itemRemovalGate.Release(); }
     }
 
-    public async Task ReplaceItemsAsync(Parcel parcel, IReadOnlyList<ParcelItem> selected, string summary, ParcelHistoryEventType eventType = ParcelHistoryEventType.Packed, CancellationToken cancellationToken = default, DeskLayoutSnapshot? deskLayout = null, bool clearDeskLayout = false)
+    public async Task ReplaceItemsAsync(Parcel parcel, IReadOnlyList<ParcelItem> selected, string summary, ParcelHistoryEventType eventType = ParcelHistoryEventType.Packed, CancellationToken cancellationToken = default)
     {
         var states = KnownParcelStates(parcel);
         var prepared = PrepareItems(parcel, selected.Select(CloneItem).ToList(), Array.Empty<ParcelItem>());
-        var persistedLayout = deskLayout is null ? null : CloneDeskLayout(deskLayout);
-        if (persistedLayout is not null) PrepareDeskLayout(parcel, persistedLayout);
-        var now = DateTime.Now; var oldStatus = parcel.Status; var oldUpdated = parcel.UpdatedAt; var oldPacked = parcel.LastPackedAt;
-        parcel.Status = ParcelStatus.Packed; parcel.UpdatedAt = now; parcel.LastPackedAt = now;
+        var now = DateTime.Now; var oldStatus = parcel.Status; var oldUpdated = parcel.UpdatedAt; var oldPacked = parcel.LastPackedAt; var oldOpened = parcel.LastOpenedAt;
+        var shouldPack = eventType == ParcelHistoryEventType.Packed;
+        if (shouldPack) { parcel.Status = ParcelStatus.Packed; parcel.LastPackedAt = now; }
+        parcel.UpdatedAt = now;
         var history = NewHistory(parcel, eventType, summary);
-        try { await _repository.ReplaceItemsWithHistoryAsync(parcel, prepared, history, cancellationToken, persistedLayout, clearDeskLayout); }
-        catch { parcel.Status = oldStatus; parcel.UpdatedAt = oldUpdated; parcel.LastPackedAt = oldPacked; throw; }
+        try { await _repository.ReplaceItemsWithHistoryAsync(parcel, prepared, history, cancellationToken); }
+        catch { parcel.Status = oldStatus; parcel.UpdatedAt = oldUpdated; parcel.LastPackedAt = oldPacked; parcel.LastOpenedAt = oldOpened; throw; }
 
         foreach (var state in states)
         {
-            state.Status = ParcelStatus.Packed;
+            state.Status = parcel.Status;
             state.UpdatedAt = now;
-            state.LastPackedAt = now;
+            state.LastPackedAt = parcel.LastPackedAt;
+            state.LastOpenedAt = parcel.LastOpenedAt;
             state.Items.Clear();
             foreach (var item in prepared) state.Items.Add(item);
-            if (clearDeskLayout) state.DeskLayout = null;
-            else if (persistedLayout is not null) state.DeskLayout = persistedLayout;
             state.History.Insert(0, history);
         }
         if (CurrentParcel?.Id == parcel.Id) CurrentParcel = null;
-    }
-
-    public async Task SaveDeskLayoutAsync(Parcel parcel, DeskLayoutSnapshot layout, string? summary = null, CancellationToken cancellationToken = default)
-    {
-        var previous = parcel.DeskLayout;
-        PrepareDeskLayout(parcel, layout);
-        var now = DateTime.Now;
-        if (layout.CreatedAt == default) layout.CreatedAt = now;
-        layout.UpdatedAt = now;
-        var history = NewHistory(parcel, previous is null ? ParcelHistoryEventType.DeskLayoutCaptured : ParcelHistoryEventType.DeskLayoutUpdated, summary ?? (previous is null ? "Desk layout remembered" : "Desk layout updated"));
-        var oldUpdated = parcel.UpdatedAt;
-        parcel.UpdatedAt = now;
-        try { await _repository.SaveDeskLayoutAsync(parcel.Id, layout, history, cancellationToken); }
-        catch { parcel.UpdatedAt = oldUpdated; throw; }
-        parcel.DeskLayout = layout;
-        parcel.History.Insert(0, history);
-    }
-
-    public async Task RemoveDeskLayoutAsync(Parcel parcel, CancellationToken cancellationToken = default)
-    {
-        if (parcel.DeskLayout is null) return;
-        var now = DateTime.Now;
-        var history = NewHistory(parcel, ParcelHistoryEventType.DeskLayoutRemoved, "Desk layout removed; parcel items were kept");
-        var oldUpdated = parcel.UpdatedAt;
-        parcel.UpdatedAt = now;
-        try { await _repository.DeleteDeskLayoutAsync(parcel.Id, history, cancellationToken); }
-        catch { parcel.UpdatedAt = oldUpdated; throw; }
-        parcel.DeskLayout = null;
-        parcel.History.Insert(0, history);
-    }
-
-    public async Task RecordDeskLayoutRestoredAsync(Parcel parcel, string summary, CancellationToken cancellationToken = default)
-    {
-        var history = NewHistory(parcel, ParcelHistoryEventType.DeskLayoutRestored, summary);
-        var oldUpdated = parcel.UpdatedAt;
-        parcel.UpdatedAt = history.Timestamp;
-        try { await _repository.InsertHistoryOnlyAsync(history, cancellationToken); }
-        catch { parcel.UpdatedAt = oldUpdated; throw; }
-        parcel.History.Insert(0, history);
     }
 
     public async Task VerifyItemsAsync(Parcel parcel, CancellationToken cancellationToken = default)
@@ -360,12 +310,6 @@ public sealed class WorkspaceStore : BindableBase
     public Task<string> BackupAsync(CancellationToken cancellationToken = default) => _repository.BackupAsync(cancellationToken);
     public Task<(int Parcels, int TodayItems)> GetCountsAsync(CancellationToken cancellationToken = default) => _repository.GetCountsAsync(cancellationToken);
     public Task SetThemeAsync(string theme, CancellationToken cancellationToken = default) { Theme = theme; return _repository.SetSettingAsync("Theme", theme, cancellationToken); }
-    public async Task SetDeskMemorySettingsAsync(DeskMemorySettings settings, CancellationToken cancellationToken = default)
-    {
-        var normalized = settings with { RestorationTimeoutSeconds = Math.Clamp(settings.RestorationTimeoutSeconds, 2, 120) };
-        await _repository.SetSettingAsync(DeskMemorySettings.SettingKey, JsonSerializer.Serialize(normalized), cancellationToken);
-        DeskMemorySettings = normalized;
-    }
     public void SetCurrent(Parcel? parcel) => CurrentParcel = parcel;
 
     private List<Parcel> KnownParcelStates(Parcel requested)
@@ -384,16 +328,6 @@ public sealed class WorkspaceStore : BindableBase
         foreach (var state in states)
         {
             foreach (var item in state.Items.Where(item => itemIds.Contains(item.Id)).ToList()) state.Items.Remove(item);
-            if (state.DeskLayout is not null)
-            {
-                state.DeskLayout.Windows.RemoveAll(window => window.ParcelItemId is Guid id && itemIds.Contains(id));
-                // Keep live Desk Memory aligned with the repository: a layout
-                // is useful only while at least one remaining saved item still
-                // anchors a window record by stable ID. This also clears stale
-                // in-memory orphan rows that SQLite removes during the delete.
-                var remainingItemIds = state.Items.Select(item => item.Id).ToHashSet();
-                if (!state.DeskLayout.Windows.Any(window => window.ParcelItemId is Guid id && remainingItemIds.Contains(id))) state.DeskLayout = null;
-            }
             state.UpdatedAt = history.Timestamp;
             state.History.Insert(0, history);
             state.NotifyItemsChanged();
@@ -434,33 +368,8 @@ public sealed class WorkspaceStore : BindableBase
         BrowserTabGroupId = source.BrowserTabGroupId, BrowserTabGroupTitle = source.BrowserTabGroupTitle, BrowserTabGroupColor = source.BrowserTabGroupColor,
         BrowserFaviconUrl = source.BrowserFaviconUrl, BrowserCapturedAt = source.BrowserCapturedAt, BrowserLastOpenedAt = source.BrowserLastOpenedAt,
         BrowserSessionTabId = source.BrowserSessionTabId, BrowserSessionWindowId = source.BrowserSessionWindowId, BrowserConnectionId = source.BrowserConnectionId,
-        BrowserWindowLeft = source.BrowserWindowLeft, BrowserWindowTop = source.BrowserWindowTop, BrowserWindowWidth = source.BrowserWindowWidth, BrowserWindowHeight = source.BrowserWindowHeight,
-        BrowserWindowState = source.BrowserWindowState, BrowserWindowFocused = source.BrowserWindowFocused, BrowserWindowDpiX = source.BrowserWindowDpiX, BrowserWindowDpiY = source.BrowserWindowDpiY,
         RuntimeWindowHandle = source.RuntimeWindowHandle, RuntimeProcessId = source.RuntimeProcessId
     };
-
-    private static DeskLayoutSnapshot CloneDeskLayout(DeskLayoutSnapshot source)
-    {
-        var clone = new DeskLayoutSnapshot { Id = source.Id, ParcelId = source.ParcelId, Name = source.Name, CreatedAt = source.CreatedAt, UpdatedAt = source.UpdatedAt, IsCurrent = source.IsCurrent, IsEnabled = source.IsEnabled, TopologySignature = source.TopologySignature };
-        foreach (var monitor in source.Monitors) clone.Monitors.Add(new DeskMonitorLayout { Id = monitor.Id, LayoutSnapshotId = monitor.LayoutSnapshotId, ParcelId = monitor.ParcelId, DeviceIdentifier = monitor.DeviceIdentifier, FriendlyName = monitor.FriendlyName, IsPrimary = monitor.IsPrimary, Bounds = monitor.Bounds, WorkArea = monitor.WorkArea, RelativeArrangement = monitor.RelativeArrangement, DpiX = monitor.DpiX, DpiY = monitor.DpiY, Orientation = monitor.Orientation, CaptureOrder = monitor.CaptureOrder, CreatedAt = monitor.CreatedAt });
-        foreach (var window in source.Windows) clone.Windows.Add(new DeskWindowLayout { Id = window.Id, LayoutSnapshotId = window.LayoutSnapshotId, ParcelId = window.ParcelId, ParcelItemId = window.ParcelItemId, ExecutableIdentity = window.ExecutableIdentity, ApplicationIdentifier = window.ApplicationIdentifier, ProcessName = window.ProcessName, CapturedTitle = window.CapturedTitle, NormalizedTitle = window.NormalizedTitle, WindowClassName = window.WindowClassName, SavedMonitorId = window.SavedMonitorId, AbsoluteBounds = window.AbsoluteBounds, NormalBounds = window.NormalBounds, RelativeLeft = window.RelativeLeft, RelativeTop = window.RelativeTop, RelativeWidth = window.RelativeWidth, RelativeHeight = window.RelativeHeight, WindowState = window.WindowState, ZOrderRank = window.ZOrderRank, SourceDpiX = window.SourceDpiX, SourceDpiY = window.SourceDpiY, MonitorDpiX = window.MonitorDpiX, MonitorDpiY = window.MonitorDpiY, IsTopmost = window.IsTopmost, CoordinatesArePhysicalPixels = window.CoordinatesArePhysicalPixels, IsEnabled = window.IsEnabled, IsSupported = window.IsSupported, MatchMetadata = window.MatchMetadata, LastMatchConfidence = window.LastMatchConfidence, CreatedAt = window.CreatedAt, UpdatedAt = window.UpdatedAt });
-        return clone;
-    }
-    private static void PrepareDeskLayout(Parcel parcel, DeskLayoutSnapshot layout)
-    {
-        layout.ParcelId = parcel.Id;
-        layout.IsCurrent = true;
-        foreach (var monitor in layout.Monitors)
-        {
-            monitor.LayoutSnapshotId = layout.Id;
-            monitor.ParcelId = parcel.Id;
-        }
-        foreach (var window in layout.Windows)
-        {
-            window.LayoutSnapshotId = layout.Id;
-            window.ParcelId = parcel.Id;
-        }
-    }
     private static string ValidateName(string name) { var clean = name?.Trim() ?? string.Empty; if (clean.Length == 0) throw new ArgumentException("A parcel name is required.", nameof(name)); if (clean.Length > 80) throw new ArgumentException("Parcel names must be 80 characters or fewer.", nameof(name)); return clean; }
     private static string ValidateItemName(string name) { var clean = name?.Trim() ?? string.Empty; if (clean.Length == 0) throw new ArgumentException("An item name is required.", nameof(name)); if (clean.Length > 160) throw new ArgumentException("Item names must be 160 characters or fewer.", nameof(name)); return clean; }
     private static string ValidateDescription(string description) { var clean = description?.Trim() ?? string.Empty; if (clean.Length > 240) throw new ArgumentException("Descriptions must be 240 characters or fewer.", nameof(description)); return clean; }

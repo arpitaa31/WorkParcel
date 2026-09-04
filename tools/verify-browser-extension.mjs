@@ -29,12 +29,6 @@ const removed = [];
 let nextTabId = 20;
 let nextWindowId = 99;
 const disconnectCallbacks = [];
-const browserWindows = new Map([
-  [10, { id: 10, left: 10, top: 20, width: 1200, height: 800, state: "normal", focused: true }],
-  [11, { id: 11, left: 40, top: 60, width: 1000, height: 700, state: "maximized", focused: false }],
-  [12, { id: 12, left: 80, top: 90, width: 900, height: 600, state: "normal", focused: false }]
-]);
-const windowUpdates = [];
 
 const event = () => ({ addListener: callback => listeners.push(callback) });
 const port = {
@@ -92,11 +86,8 @@ const chrome = {
       const windowId = nextWindowId++;
       const tab = { id: nextTabId++, windowId, index: 0, url: options.url, title: options.url, pinned: false, active: true, incognito: false, groupId: -1 };
       tabs.push(tab);
-      browserWindows.set(windowId, { id: windowId, ...options });
       return { id: windowId };
     },
-    getAll: async () => [...browserWindows.values()],
-    update: async (windowId, changes) => { const window = browserWindows.get(windowId); if (!window) throw new Error("window not found"); Object.assign(window, changes); windowUpdates.push({ windowId, changes }); return window; },
     onCreated: event(), onRemoved: event()
   }
 };
@@ -104,10 +95,10 @@ const chrome = {
 const context = vm.createContext({ chrome, navigator: { userAgent: "Mozilla/5.0 Chrome/140.0" }, console, setTimeout, clearTimeout, URL, Date, Map, Set, Promise });
 vm.runInContext(fs.readFileSync(new URL("background.js", extensionRoot), "utf8"), context, { filename: "background.js" });
 await new Promise(resolve => setTimeout(resolve, 10));
-await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "hello", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.1.0", payload: { status: "CONNECTED", connectionId: "test-connection" } });
-await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "version-status", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.1.0", payload: { status: "VERSION_MISMATCH", connectionId: "test-connection" } });
+await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "hello", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.2.0", payload: { status: "CONNECTED", connectionId: "test-connection" } });
+await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "version-status", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.2.0", payload: { status: "VERSION_MISMATCH", connectionId: "test-connection" } });
 assert.equal(vm.runInContext("state.status", context), "VERSION MISMATCH", "protocol mismatch status is presented with user-facing spacing");
-await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "hello-again", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.1.0", payload: { status: "CONNECTED", connectionId: "test-connection" } });
+await context.onNativeMessage({ version: 1, type: "connection_status", requestId: "hello-again", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.2.0", payload: { status: "CONNECTED", connectionId: "test-connection" } });
 assert.equal(context.acceptRequest("persisted-request"), false, "recent command IDs survive a worker restart window");
 context.persistState();
 await new Promise(resolve => setTimeout(resolve, 10));
@@ -116,7 +107,7 @@ await assert.rejects(() => context.sendToApp("refresh", {}, 20), /Connection tim
 await new Promise(resolve => setTimeout(resolve, 10));
 assert.equal(storage.get("workParcelConnection").status, "CONNECTION ERROR", "request timeouts surface a recoverable connection error");
 vm.runInContext("clearTimeout(reconnectTimer); reconnectTimer = null;", context);
-await context.onNativeMessage({ version: 1, type: "error", requestId: "diagnostic-error", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.1.0", payload: { code: "connection_error", message: "diagnostic failure" } });
+await context.onNativeMessage({ version: 1, type: "error", requestId: "diagnostic-error", browser: "chrome", connectionId: "test-connection", extensionVersion: "0.2.0", payload: { code: "connection_error", message: "diagnostic failure" } });
 assert.equal(vm.runInContext("state.status", context), "CONNECTION ERROR", "native connection errors surface in the popup state");
 storageWritesFail = true;
 assert.doesNotThrow(() => context.persistState(), "storage write failures must not escape the worker");
@@ -129,9 +120,6 @@ assert.equal(snapshot.tabs.length, 3, "incognito tabs are excluded while unsuppo
 assert.equal(snapshot.windowCount, 2, "private-only windows cannot affect visible window grouping");
 assert.equal(snapshot.tabs.find(tab => tab.sessionTabId === "3").canRestore, false);
 assert.equal(snapshot.tabs.find(tab => tab.sessionTabId === "1").groupTitle, "Research");
-assert.equal(snapshot.tabs.find(tab => tab.sessionTabId === "1").windowLeft, 10);
-assert.equal(snapshot.tabs.find(tab => tab.sessionTabId === "1").windowWidth, 1200);
-assert.equal(snapshot.tabs.find(tab => tab.sessionTabId === "1").windowFocused, true);
 assert.equal(snapshot.tabs.find(tab => tab.sessionTabId === "4").sessionGroupId, null, "tabs without a group id remain explicitly ungrouped");
 assert.equal(vm.runInContext("isRestorable('https://user:password@example.com/private')", context), false, "credential-bearing URLs are not restorable");
 assert.equal(vm.runInContext("safeFavicon('https://user:password@example.com/icon.png')", context), null, "credential-bearing favicon references are rejected");
@@ -186,9 +174,10 @@ assert.deepEqual(removed, [1]);
 const missingClose = await context.closeTabs([{ id: "missing", sessionTabId: "1", sessionWindowId: "10", browser: "chrome", connectionId: "test-connection", expectedUrl: "https://example.com/a" }]);
 assert.equal(missingClose.results[0].status, "Stale", "a missing tab identity is rejected instead of counted as still open");
 
-const opened = await context.openTabs([{ id: "saved", url: "https://restore.example/", browserWindowGroupId: "window-2", tabIndex: 0, pinned: true, browserTabGroupId: "group-2", browserTabGroupTitle: "Restored", browserTabGroupColor: "green", windowLeft: 321, windowTop: 222, windowWidth: 1111, windowHeight: 777, windowState: "normal", windowFocused: true }]);
+const opened = await context.openTabs([{ id: "saved", url: "https://restore.example/", browserWindowGroupId: "window-2", tabIndex: 0, pinned: true, browserTabGroupId: "group-2", browserTabGroupTitle: "Restored", browserTabGroupColor: "green" }]);
 assert.equal(opened.results[0].status, "Opened");
-assert.ok(tabs.some(tab => tab.url === "https://restore.example/"));
-assert.ok(windowUpdates.some(update => update.changes.left === 321 && update.changes.top === 222 && update.changes.width === 1111 && update.changes.height === 777 && update.changes.focused === true), "saved browser window bounds and focus are applied after tab restore");
+const restoredTab = tabs.find(tab => tab.url === "https://restore.example/");
+assert.ok(restoredTab, "saved browser tab is opened");
+assert.equal(restoredTab.pinned, true, "saved tab metadata is applied");
 
 console.log("browser-extension manifest and fake API smoke passed: MV3 permissions, timeout/storage failure states, snapshot, private/internal exclusion, stale close, safe close, open and group metadata");

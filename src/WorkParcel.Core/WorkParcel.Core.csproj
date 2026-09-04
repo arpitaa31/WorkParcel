@@ -11,7 +11,6 @@
     <Compile Include="BrowserRestorePlanner.cs" />
     <Compile Include="BrowserClosePlanner.cs" />
     <Compile Include="..\WorkParcel.App\Models\WorkModels.cs" Link="Models\WorkModels.cs" />
-    <Compile Include="..\WorkParcel.App\Models\DeskMemoryModels.cs" Link="Models\DeskMemoryModels.cs" />
     <Compile Include="..\WorkParcel.App\Services\AppDataPaths.cs" Link="Services\AppDataPaths.cs" />
     <Compile Include="..\WorkParcel.App\Services\AppLogger.cs" Link="Services\AppLogger.cs" />
     <Compile Include="..\WorkParcel.App\Services\SqliteDatabase.cs" Link="Services\SqliteDatabase.cs" />
@@ -22,9 +21,6 @@
     <Compile Include="..\WorkParcel.App\Services\ParcelItemServices.cs" Link="Services\ParcelItemServices.cs" />
     <Compile Include="..\WorkParcel.App\Services\WindowsWorkspaceServices.cs" Link="Services\WindowsWorkspaceServices.cs" />
     <Compile Include="..\WorkParcel.App\Services\ParcelItemQueries.cs" Link="Services\ParcelItemQueries.cs" />
-    <Compile Include="..\WorkParcel.App\Services\DeskMemoryLogic.cs" Link="Services\DeskMemoryLogic.cs" />
-    <Compile Include="..\WorkParcel.App\Services\DeskMemoryNative.cs" Link="Services\DeskMemoryNative.cs" />
-    <Compile Include="..\WorkParcel.App\Services\DeskMemoryService.cs" Link="Services\DeskMemoryService.cs" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
   </ItemGroup>
 </Project>
