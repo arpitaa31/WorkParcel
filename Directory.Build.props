@@ -2,7 +2,7 @@
   <PropertyGroup>
     <!-- Single release-version source shared by the application, host, and installer build. -->
     <VersionPrefix>0.2.0</VersionPrefix>
-    <ReleaseVersion>0.2.0-beta.1</ReleaseVersion>
+    <ReleaseVersion>0.2.0-beta.2</ReleaseVersion>
     <Version Condition="'$(Version)' == ''">$(ReleaseVersion)</Version>
     <AssemblyVersion Condition="'$(AssemblyVersion)' == ''">0.2.0.0</AssemblyVersion>
     <FileVersion Condition="'$(FileVersion)' == ''">0.2.0.0</FileVersion>

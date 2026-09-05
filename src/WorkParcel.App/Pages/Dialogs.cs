@@ -135,6 +135,26 @@ internal static class Dialogs
 
     public static async Task ShowMessage(Page page, string title, string message) => await Ui.ShowDialog(new ContentDialog { Title = title, Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap }, CloseButtonText = "OK", XamlRoot = page.XamlRoot });
 
+    public static async Task ShowBrowserTabsHowItWorksAsync(Page page)
+    {
+        var content = Ui.Stack(10);
+        content.Children.Add(Ui.Text("The WorkParcel browser extension lets the desktop app see the tabs you choose to include in a parcel. When you pack the parcel away, WorkParcel can close those selected tabs. Opening the parcel restores their saved links.", 13));
+        content.Children.Add(Ui.Text(@"WorkParcel saves the tab title and URL.
+It does not save passwords.
+It does not save cookies.
+It does not read page contents.
+It does not capture keystrokes.
+Private browsing tabs are excluded.
+The browser extension is required only for browser-tab features.", 12, false, "#8D9CA2"));
+        await Ui.ShowDialog(new ContentDialog
+        {
+            Title = "HOW BROWSER TABS WORK",
+            Content = content,
+            CloseButtonText = "GOT IT",
+            XamlRoot = page.XamlRoot
+        });
+    }
+
     public static async Task<bool> ConfirmPermanentDelete(Page page, Parcel parcel)
     {
         var input = new TextBox { Header = "TYPE THE PARCEL NAME TO CONFIRM", PlaceholderText = parcel.Name };

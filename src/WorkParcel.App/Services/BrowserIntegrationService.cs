@@ -43,7 +43,7 @@ public enum BrowserSetupStep
     Complete = 4
 }
 
-public sealed record BrowserConnectionInfo(string Browser, BrowserConnectionStatus Status, string? ExtensionVersion, DateTimeOffset? LastConnectedUtc, int ActiveConnections, string? LastError, int WindowCount = 0, int TabCount = 0, string? ConnectionId = null, bool BrowserInstalled = false, bool HostInstalled = false, int ProtocolVersion = 0, bool ProtocolCompatible = false, bool ExtensionDetected = false);
+public sealed record BrowserConnectionInfo(string Browser, BrowserConnectionStatus Status, string? ExtensionVersion, DateTimeOffset? LastConnectedUtc, int ActiveConnections, string? LastError, int WindowCount = 0, int TabCount = 0, string? ConnectionId = null, bool BrowserInstalled = false, bool HostInstalled = false, int ProtocolVersion = 0, bool ProtocolCompatible = false, bool ExtensionDetected = false, int EligibleTabCount = 0);
 
 public sealed record BrowserConnectionStateInfo(BrowserConnectionInfo Details, BrowserConnectionState State);
 
@@ -454,7 +454,7 @@ public sealed class BrowserIntegrationService : IDisposable
         public string ConnectionKey { get; set; } = string.Empty; public string Browser { get; private set; } = "unknown"; public string? ExtensionVersion { get; private set; } public DateTimeOffset? LastConnected { get; private set; } public string? LastError { get; private set; } public BrowserTabSnapshot? LatestSnapshot { get; private set; } public int ProtocolVersion { get; private set; } public bool ProtocolCompatible { get; private set; } public bool VersionMismatchDetected { get; private set; } public BrowserConnectionStatus FailureStatus { get; private set; } = BrowserConnectionStatus.ConnectionLost;
         public string FailureResultStatus => FailureStatus == BrowserConnectionStatus.ConnectionError ? "ConnectionError" : "ConnectionLost";
         public string FailureResultMessage => FailureStatus == BrowserConnectionStatus.ConnectionError ? "The browser connection timed out or returned an error. Reconnect and try again." : "The browser extension did not respond. Try again after reconnecting.";
-        public BrowserConnectionInfo Info => new(Browser, Status, ExtensionVersion, LastConnected, 1, LastError, LatestSnapshot?.WindowCount ?? 0, LatestSnapshot?.Tabs.Count ?? 0, ConnectionKey, false, false, ProtocolVersion, ProtocolCompatible, Browser is "chrome" or "edge");
+        public BrowserConnectionInfo Info => new(Browser, Status, ExtensionVersion, LastConnected, 1, LastError, LatestSnapshot?.WindowCount ?? 0, LatestSnapshot?.Tabs.Count ?? 0, ConnectionKey, false, false, ProtocolVersion, ProtocolCompatible, Browser is "chrome" or "edge", LatestSnapshot?.Tabs.Count(tab => BrowserTabRules.IsAllowedForCapture(tab)) ?? 0);
         private BrowserConnectionStatus Status => VersionMismatchDetected ? BrowserConnectionStatus.VersionMismatch : LastError is not null ? FailureStatus : Browser == "unknown" ? BrowserConnectionStatus.Connecting : BrowserConnectionStatus.Connected;
 
         public async Task RunAsync(CancellationToken cancellationToken)
@@ -616,8 +616,10 @@ public static class BrowserInstallationService
         var candidates = browser.Equals("edge", StringComparison.OrdinalIgnoreCase)
             ? new[] { Path.Combine(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"), Path.Combine(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"), Path.Combine(local, "Microsoft", "Edge", "Application", "msedge.exe") }
             : new[] { Path.Combine(programFiles, "Google", "Chrome", "Application", "chrome.exe"), Path.Combine(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"), Path.Combine(local, "Google", "Chrome", "Application", "chrome.exe") };
-        return candidates.FirstOrDefault(File.Exists);
+        return FindExecutable(browser, candidates);
     }
+
+    public static string? FindExecutable(string browser, IEnumerable<string> candidates) => candidates.FirstOrDefault(File.Exists);
 
     public static bool IsInstalled(string browser) => FindExecutable(browser) is not null;
 

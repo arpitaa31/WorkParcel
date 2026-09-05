@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Diagnostics;
 using System.Text;
 using WorkParcel.Core.Browser;
 using WorkParcel_App.Models;
@@ -570,6 +571,95 @@ public sealed class BrowserIntegrationTests
         var result = Assert.Single(await operation);
         Assert.Equal(item.Id.ToString(), result.ItemKey);
         Assert.Equal("ConnectionLost", result.Status);
+    }
+
+    [Fact]
+    public void BrowserExecutableResolutionReportsMissingExecutable()
+    {
+        using var temp = new TestDirectory();
+        var candidate = Path.Combine(temp.Path, "chrome.exe");
+
+        Assert.Null(BrowserInstallationService.FindExecutable("chrome", new[] { candidate }));
+    }
+
+    [Fact]
+    public void MissingInstalledExtensionFolderIsReportedInsteadOfSilentlyIgnored()
+    {
+        using var temp = new TestDirectory();
+        var started = false;
+        var result = ExternalLaunchService.TryOpenFolder(Path.Combine(temp.Path, "browser-extension"), _ =>
+        {
+            started = true;
+            return true;
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("browser extension was not included", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(started);
+    }
+
+    [Fact]
+    public void FailedExternalLaunchIsReportedToTheCaller()
+    {
+        using var temp = new TestDirectory();
+        var folder = Directory.CreateDirectory(Path.Combine(temp.Path, "browser-extension")).FullName;
+
+        var result = ExternalLaunchService.TryOpenFolder(folder, _ => false);
+
+        Assert.False(result.Succeeded);
+        Assert.Contains("could not open", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SuccessfulFolderLaunchUsesExplorerAndTheResolvedInstalledFolder()
+    {
+        using var temp = new TestDirectory();
+        var folder = Directory.CreateDirectory(Path.Combine(temp.Path, "browser-extension")).FullName;
+        ProcessStartInfo? started = null;
+
+        var result = ExternalLaunchService.TryOpenFolder(folder, info =>
+        {
+            started = info;
+            return true;
+        });
+
+        Assert.True(result.Succeeded);
+        Assert.NotNull(started);
+        Assert.Equal("explorer.exe", started!.FileName);
+        Assert.Equal(new[] { folder }, started.ArgumentList);
+    }
+
+    [Fact]
+    public void SuccessfulBrowserLaunchUsesTheCorrectBrowserExecutableAndPage()
+    {
+        ProcessStartInfo? started = null;
+        var result = ExternalLaunchService.TryOpenBrowserExtensions(
+            "edge",
+            _ => "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+            info =>
+            {
+                started = info;
+                return true;
+            });
+
+        Assert.True(result.Succeeded);
+        Assert.NotNull(started);
+        Assert.Equal("C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe", started!.FileName);
+        Assert.Equal(new[] { "--new-tab", "edge://extensions/" }, started.ArgumentList);
+    }
+
+    [Fact]
+    public void InstalledPathResolutionDoesNotUseARepositorySibling()
+    {
+        using var temp = new TestDirectory();
+        var install = Directory.CreateDirectory(Path.Combine(temp.Path, "install")).FullName;
+        var appBase = Directory.CreateDirectory(Path.Combine(install, "App")).FullName;
+        var repositoryExtension = Directory.CreateDirectory(Path.Combine(temp.Path, "repository", "browser-extension")).FullName;
+
+        Assert.Null(InstalledResourcePathResolver.Find(appBase, "browser-extension"));
+        var installedExtension = Directory.CreateDirectory(Path.Combine(install, "browser-extension")).FullName;
+        Assert.Equal(installedExtension, InstalledResourcePathResolver.Find(appBase, "browser-extension"));
+        Assert.NotEqual(repositoryExtension, installedExtension);
     }
 
     private static BrowserTabSnapshot Snapshot(string browser, string url) => new()

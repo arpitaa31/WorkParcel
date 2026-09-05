@@ -60,8 +60,8 @@ if (-not (Test-Path -LiteralPath $propsPath -PathType Leaf)) { throw "Version so
 $version = [string]$props.Project.PropertyGroup.VersionPrefix
 $releaseVersion = [string]$props.Project.PropertyGroup.ReleaseVersion
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Directory.Build.props must contain a three-part VersionPrefix; found '$version'." }
-if ($releaseVersion -ne '0.2.0-beta.1') { throw "This release script is for 0.2.0-beta.1; found '$releaseVersion'." }
-$releaseNotesSource = Join-Path $repoRoot ("docs\RELEASE-NOTES-{0}.md" -f $version)
+if ($releaseVersion -ne '0.2.0-beta.2') { throw "This release script is for 0.2.0-beta.2; found '$releaseVersion'." }
+$releaseNotesSource = Join-Path $repoRoot ("docs\RELEASE-NOTES-{0}.md" -f $releaseVersion)
 
 foreach ($requiredPath in @($solutionPath, $appProjectPath, $hostProjectPath, $extensionSource, $releaseNotesSource, $browserGuideSource, $troubleshootingSource, $portableReadmeSource)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Required release input is missing: $requiredPath" }
@@ -112,9 +112,18 @@ foreach ($fileName in @('manifest.json', 'background.js', 'popup.html', 'popup.j
     Copy-Item -LiteralPath (Join-Path $extensionSource $fileName) -Destination $extensionStage -Force
 }
 Copy-DirectoryContents (Join-Path $extensionSource 'icons') (Join-Path $extensionStage 'icons')
+foreach ($fileName in @('manifest.json', 'background.js', 'popup.html', 'popup.js', 'popup.css', 'icons\icon16.png', 'icons\icon32.png', 'icons\icon128.png')) {
+    Assert-File (Join-Path $extensionStage $fileName)
+}
 Copy-DirectoryContents $extensionStage (Join-Path $installerStage 'browser-extension')
 foreach ($doc in @(@{Source=$browserGuideSource; Name='Browser-Extension-Setup.md'}, @{Source=$troubleshootingSource; Name='Installation-Troubleshooting.md'})) {
     Copy-Item -LiteralPath $doc.Source -Destination (Join-Path $installerStage ("Documentation\{0}" -f $doc.Name)) -Force
+}
+Assert-File (Join-Path $installerStage 'BrowserHost\Setup-BrowserHost.ps1')
+Assert-File (Join-Path $installerStage 'Documentation\Browser-Extension-Setup.md')
+Assert-File (Join-Path $installerStage 'Documentation\Installation-Troubleshooting.md')
+foreach ($fileName in @('manifest.json', 'background.js', 'popup.html', 'popup.js', 'popup.css', 'icons\icon16.png', 'icons\icon32.png', 'icons\icon128.png')) {
+    Assert-File (Join-Path $installerStage ("browser-extension\{0}" -f $fileName))
 }
 
 # Portable package: WorkParcel.exe is at the extraction root and supporting

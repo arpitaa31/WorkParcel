@@ -15,7 +15,7 @@ WorkParcel 0.2.0 Beta is a public beta for Windows 10/11 x64. It saves a selecte
 
 ## Download and installation
 
-Download the public beta from the [GitHub Releases page](https://github.com/arpitaa31/WorkParcel/releases). The installer is named `WorkParcel-Setup-0.2.0-beta.1.exe`.
+Download the public beta from the [GitHub Releases page](https://github.com/arpitaa31/WorkParcel/releases). The installer is named `WorkParcel-Setup-0.2.0-beta.2.exe`.
 
 1. Download the installer and verify its SHA-256 value against `SHA256SUMS.txt`.
 2. Run the installer. It targets Windows 10/11 x64, installs per user under `%LOCALAPPDATA%\Programs\WorkParcel`, creates a Start-menu shortcut, and offers an optional desktop shortcut.
@@ -25,7 +25,7 @@ The installer carries the .NET runtime and Windows App SDK dependencies. It does
 
 ## Browser extension
 
-The browser extension is required only for browser-tab integration. It is not published in the Chrome Web Store or Microsoft Edge Add-ons. The separate download `WorkParcel-Browser-Extension-0.2.0-beta.1.zip` must be loaded as an unpacked extension, and the exact extension ID must be registered for the local native host. Browser-internal and private tabs are excluded. Files, folders, applications, open windows, manual web links, notes, parcels, Today, Archive, and Restore work without the extension.
+The browser extension is required only for browser-tab integration. It is not published in the Chrome Web Store or Microsoft Edge Add-ons. The separate download `WorkParcel-Browser-Extension-0.2.0-beta.2.zip` must be loaded as an unpacked extension, and the exact extension ID must be registered for the local native host. Browser-internal and private tabs are excluded. Files, folders, applications, open windows, manual web links, notes, parcels, Today, Archive, and Restore work without the extension.
 
 See `BROWSER-EXTENSION-SETUP.md` for the manual Chrome/Edge setup. Uninstalling WorkParcel removes only its own files and current-user registration; it does not remove the browser or modify browser security settings.
 

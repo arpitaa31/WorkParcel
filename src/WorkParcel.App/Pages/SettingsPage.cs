@@ -1,6 +1,8 @@
 using System.Diagnostics;
+using System.Reflection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
 using WorkParcel.Core.Browser;
 using WorkParcel_App.Models;
 using WorkParcel_App.Services;
@@ -14,10 +16,10 @@ public sealed partial class SettingsPage : PageBase
     private int _browserRefreshVersion;
     private bool _stateSubscribed;
     private bool _windowActivationSubscribed;
-    private bool _browserActionInProgress;
     private bool _updatingPrivacy;
     private CheckBox? _captureToggle;
     private CheckBox? _tabClosingToggle;
+    private readonly HashSet<string> _expandedBrowsers = new(StringComparer.OrdinalIgnoreCase);
 
     public SettingsPage()
     {
@@ -106,18 +108,21 @@ public sealed partial class SettingsPage : PageBase
     {
         var stack = Ui.Stack(7);
         stack.Children.Add(Ui.Text("Choose the look that is most comfortable for you.", 13));
+        var feedback = Ui.Text($"CURRENT THEME: {Store.Theme.ToUpperInvariant()}", 10, false, "#8D9CA2");
         var row = Ui.Row();
         foreach (var theme in new[] { "System", "Light", "Dark" })
         {
             var button = Ui.Button(theme.ToUpperInvariant());
-            button.Click += async (_, _) =>
+            button.Click += async (_, _) => await RunButtonActionAsync(button, feedback, "SAVING", async () =>
             {
                 await Store.SetThemeAsync(theme);
                 RequestedTheme = theme == "Dark" ? ElementTheme.Dark : theme == "Light" ? ElementTheme.Light : ElementTheme.Default;
-            };
+                feedback.Text = $"CURRENT THEME: {theme.ToUpperInvariant()}";
+            }, "THEME SAVED");
             row.Children.Add(button);
         }
         stack.Children.Add(row);
+        stack.Children.Add(feedback);
         return stack;
     }
 
@@ -182,51 +187,45 @@ public sealed partial class SettingsPage : PageBase
         if (state.State == BrowserConnectionState.Connected)
         {
             var checkedAt = details.LastConnectedUtc?.ToLocalTime().LocalDateTime;
-            card.Children.Add(Ui.Mono($"{details.TabCount} tabs available   |   {details.WindowCount} browser windows found   |   Last checked {Ui.Relative(checkedAt)}", 10, "#9BE28F"));
+            card.Children.Add(Ui.Mono($"{details.EligibleTabCount} eligible tabs available   |   {details.WindowCount} browser windows found   |   Last checked {Ui.Relative(checkedAt)}", 10, "#9BE28F"));
         }
 
+        var actionFeedback = Ui.Text("READY", 10, false, "#8D9CA2");
         var actions = Ui.Row();
         var primaryText = PrimaryAction(state.State, name);
         if (primaryText is not null)
         {
             var primary = Ui.Button(primaryText, true);
-            primary.Click += async (_, _) =>
-            {
-                if (_browserActionInProgress) return;
-                _browserActionInProgress = true;
-                primary.IsEnabled = false;
-                try { await RunPrimaryActionAsync(browser, state.State); }
-                finally { _browserActionInProgress = false; primary.IsEnabled = true; }
-            };
+            primary.Click += async (_, _) => await RunButtonActionAsync(primary, actionFeedback, "WORKING", () => RunPrimaryActionAsync(browser, state.State, actionFeedback), "ACTION COMPLETE");
             actions.Children.Add(primary);
         }
 
         if (state.State == BrowserConnectionState.Connected)
         {
             var disconnect = Ui.LinkButton("Disconnect");
-            disconnect.Click += (_, _) =>
+            disconnect.Click += async (_, _) => await RunButtonActionAsync(disconnect, actionFeedback, "DISCONNECTING", async () =>
             {
                 BrowserIntegrationService.Current.Disconnect(browser);
-                _ = RefreshBrowserAsync();
-            };
+                await RefreshBrowserAsync();
+            }, "DISCONNECTED");
             actions.Children.Add(disconnect);
         }
         else if (state.State == BrowserConnectionState.ConnectionFailed)
         {
             var detailsLink = Ui.LinkButton("View details");
-            detailsLink.Click += async (_, _) => await ShowDiagnosticsAsync(browser, state);
+            detailsLink.Click += async (_, _) => await RunButtonActionAsync(detailsLink, actionFeedback, "OPENING", () => ShowDiagnosticsAsync(browser, state), "DIAGNOSTICS CLOSED");
             actions.Children.Add(detailsLink);
         }
         else if (state.State != BrowserConnectionState.BrowserMissing)
         {
             var how = Ui.LinkButton("How does this work?");
-            how.Click += async (_, _) => await ShowBrowserHowItWorksAsync(browser);
+            how.Click += async (_, _) => await RunButtonActionAsync(how, actionFeedback, "OPENING", () => ShowBrowserHowItWorksAsync(browser), "HOW-TO CLOSED");
             actions.Children.Add(how);
         }
         card.Children.Add(actions);
+        card.Children.Add(actionFeedback);
 
-        var advanced = new Expander { Header = Ui.Text("ADVANCED DETAILS", 11, true, "#8D9CA2"), Content = AdvancedDetails(browser, state), IsExpanded = false };
-        card.Children.Add(advanced);
+        card.Children.Add(BuildAdvancedSection(browser, state));
         return Ui.Card(card, 12, 3);
     }
 
@@ -235,6 +234,58 @@ public sealed partial class SettingsPage : PageBase
         var color = browser == "edge" ? "#67C7FF" : "#9BE28F";
         var label = browser == "edge" ? "EDG" : "CHR";
         return new Border { Width = 42, Height = 42, Background = Ui.Resource("SubtleSurfaceBrush"), BorderBrush = Ui.Brush(color), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(3), Child = Ui.Mono(label, 11, color, true), HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Top };
+    }
+
+    private UIElement BuildAdvancedSection(string browser, BrowserConnectionStateInfo state)
+    {
+        var toggle = Ui.LinkButton("›  ADVANCED DETAILS");
+        toggle.HorizontalAlignment = HorizontalAlignment.Left;
+        var initiallyExpanded = _expandedBrowsers.Contains(browser);
+        var content = new Border
+        {
+            Child = AdvancedDetails(browser, state),
+            Visibility = initiallyExpanded ? Visibility.Visible : Visibility.Collapsed,
+            Opacity = 1
+        };
+        if (initiallyExpanded) SetButtonText(toggle, "⌄  ADVANCED DETAILS");
+        toggle.Click += (_, _) => ToggleAdvanced(browser, toggle, content);
+        var stack = Ui.Stack(4);
+        stack.Children.Add(toggle);
+        stack.Children.Add(content);
+        return stack;
+    }
+
+    private void ToggleAdvanced(string browser, Button toggle, Border content)
+    {
+        if (!toggle.IsEnabled) return;
+        toggle.IsEnabled = false;
+        try
+        {
+            var expanding = content.Visibility != Visibility.Visible;
+            if (expanding) _expandedBrowsers.Add(browser);
+            else _expandedBrowsers.Remove(browser);
+            SetButtonText(toggle, expanding ? "⌄  ADVANCED DETAILS" : "›  ADVANCED DETAILS");
+            content.Visibility = expanding ? Visibility.Visible : Visibility.Collapsed;
+            content.Opacity = 1;
+
+            // The visibility change is the source of truth. The short scale
+            // animation is best-effort so a composition/runtime limitation can
+            // never make this control unresponsive or crash the page.
+            if (expanding)
+            {
+                try
+                {
+                    var visual = ElementCompositionPreview.GetElementVisual(content);
+                    visual.Scale = new System.Numerics.Vector3(.98f, .98f, 1f);
+                    var animation = visual.Compositor.CreateVector3KeyFrameAnimation();
+                    animation.InsertKeyFrame(1, System.Numerics.Vector3.One);
+                    animation.Duration = TimeSpan.FromMilliseconds(160);
+                    visual.StartAnimation(nameof(visual.Scale), animation);
+                }
+                catch { }
+            }
+        }
+        finally { toggle.IsEnabled = true; }
     }
 
     private UIElement AdvancedDetails(string browser, BrowserConnectionStateInfo state)
@@ -248,21 +299,24 @@ public sealed partial class SettingsPage : PageBase
         AddDetail(stack, "Extension version", info.ExtensionVersion ?? "Not detected");
         AddDetail(stack, "Registered extension IDs", HostRegistrationService.GetRegisteredExtensionIds(browser) ?? "Not available");
         AddDetail(stack, "Connection ID", info.ConnectionId ?? "Not connected");
-        AddDetail(stack, "Last successful connection", info.LastConnectedUtc?.ToLocalTime().ToString("g") ?? "Never");
-        AddDetail(stack, "Detected windows and tabs", $"{info.WindowCount} windows / {info.TabCount} tabs");
+        AddDetail(stack, "Last successful check", info.LastConnectedUtc?.ToLocalTime().ToString("g") ?? "Never");
+        AddDetail(stack, "Browser windows detected", info.WindowCount.ToString());
+        AddDetail(stack, "Eligible tabs detected", info.EligibleTabCount.ToString());
         if (!string.IsNullOrWhiteSpace(info.LastError)) AddDetail(stack, "Last diagnostic", info.LastError!);
 
         if (state.State != BrowserConnectionState.BrowserMissing)
         {
             var actions = Ui.Stack(4);
-            AddLinkAction(actions, "Refresh status", () => RefreshBrowserAsync());
-            AddLinkAction(actions, "Test connection", () => TestBrowserConnectionAsync(browser, true));
-            AddLinkAction(actions, "Repair connection", () => ShowGuidedSetupAsync(browser));
-            AddLinkAction(actions, "View setup help", () => ShowSetupHelpAsync(browser));
-            AddLinkAction(actions, "Open extension folder", () => { OpenExtensionFolder(); return Task.CompletedTask; });
-            AddLinkAction(actions, "Open diagnostics", () => ShowDiagnosticsAsync(browser, state));
-            if (info.HostInstalled) AddLinkAction(actions, "Remove connection", () => RemoveRegistrationAsync(browser));
+            var feedback = Ui.Text("READY", 10, false, "#8D9CA2");
+            AddLinkAction(actions, "REFRESH STATUS", feedback, () => RefreshBrowserAsync(), "REFRESHING", "STATUS REFRESHED");
+            AddLinkAction(actions, "TEST CONNECTION", feedback, () => TestBrowserConnectionAsync(browser, true, feedback), "CHECKING", "CONNECTION CHECK COMPLETE");
+            AddLinkAction(actions, "REPAIR CONNECTION", feedback, () => ShowGuidedSetupAsync(browser), "OPENING", "SETUP DIALOG CLOSED");
+            AddLinkAction(actions, "VIEW SETUP HELP", feedback, () => ShowSetupHelpAsync(browser), "OPENING", "SETUP HELP CLOSED");
+            AddLinkAction(actions, "OPEN EXTENSION FOLDER", feedback, () => OpenExtensionFolderAsync(feedback), "OPENING", "EXTENSION FOLDER OPENED");
+            AddLinkAction(actions, "OPEN DIAGNOSTICS", feedback, () => ShowDiagnosticsAsync(browser, state), "OPENING", "DIAGNOSTICS CLOSED");
+            if (info.HostInstalled) AddLinkAction(actions, "REMOVE CONNECTION", feedback, () => RemoveRegistrationAsync(browser), "REMOVING", "CONNECTION REMOVAL COMPLETE");
             stack.Children.Add(actions);
+            stack.Children.Add(feedback);
             stack.Children.Add(Ui.Text("Disconnect temporarily stops browser communication. Remove connection deletes only WorkParcel's desktop registration. Neither action deletes the browser, extension, tabs or parcels.", 11, false, "#8D9CA2"));
         }
         return stack;
@@ -280,20 +334,60 @@ public sealed partial class SettingsPage : PageBase
         stack.Children.Add(row);
     }
 
-    private static void AddLinkAction(StackPanel stack, string label, Func<Task> action)
+    private void AddLinkAction(StackPanel stack, string label, TextBlock feedback, Func<Task> action, string busyLabel, string successLabel)
     {
         var button = Ui.LinkButton(label);
         button.HorizontalAlignment = HorizontalAlignment.Left;
-        button.Click += async (_, _) => await action();
+        button.Click += async (_, _) => await RunButtonActionAsync(button, feedback, busyLabel, action, successLabel);
         stack.Children.Add(button);
     }
 
-    private async Task RunPrimaryActionAsync(string browser, BrowserConnectionState state)
+    private async Task RunButtonActionAsync(Button button, TextBlock feedback, string busyLabel, Func<Task> action, string successLabel)
+    {
+        if (!button.IsEnabled) return;
+        var originalLabel = ButtonText(button);
+        button.IsEnabled = false;
+        SetButtonText(button, $"{busyLabel}...");
+        feedback.Text = $"{busyLabel}...";
+        feedback.Foreground = Ui.Brush("#F0B45B");
+        try
+        {
+            await action();
+            if (feedback.Text == $"{busyLabel}...")
+            {
+                feedback.Text = successLabel;
+                feedback.Foreground = Ui.Brush("#9BE28F");
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLogger.LogTechnicalError(exception);
+            var message = exception is UserFacingActionException ? exception.Message : "ACTION FAILED - TRY AGAIN";
+            feedback.Text = message;
+            feedback.Foreground = Ui.Brush("#EF7777");
+            await Dialogs.ShowMessage(this, "ACTION FAILED", message);
+        }
+        finally
+        {
+            SetButtonText(button, originalLabel);
+            button.IsEnabled = true;
+        }
+    }
+
+    private static string ButtonText(Button button) => button.Content is TextBlock text ? text.Text : button.Content?.ToString() ?? string.Empty;
+
+    private static void SetButtonText(Button button, string value)
+    {
+        if (button.Content is TextBlock text) text.Text = value;
+        else button.Content = Ui.Mono(value, 11, null, true);
+    }
+
+    private async Task RunPrimaryActionAsync(string browser, BrowserConnectionState state, TextBlock? feedback = null)
     {
         switch (state)
         {
             case BrowserConnectionState.Connected:
-                await TestBrowserConnectionAsync(browser, true);
+                await TestBrowserConnectionAsync(browser, true, feedback);
                 break;
             case BrowserConnectionState.Disabled:
                 BrowserIntegrationService.Current.SetEnabled(true);
@@ -308,36 +402,91 @@ public sealed partial class SettingsPage : PageBase
     private async Task ShowGuidedSetupAsync(string browser)
     {
         var current = await DetectBrowserAsync(browser);
-        var guidedStep = BrowserSetupStepLogic.For(current);
         var name = BrowserName(browser);
         var content = Ui.Stack(10);
+        var feedback = Ui.Text("READY - FOLLOW THE STEPS ABOVE", 10, false, "#8D9CA2");
+        var extensionFolder = Ui.Button("OPEN EXTENSION FOLDER");
+        var setupHelp = Ui.LinkButton("VIEW DESKTOP SETUP HELP");
         var dialog = new ContentDialog
         {
             Title = $"CONNECT {name.ToUpperInvariant()}",
             Content = new ScrollViewer { Content = content, MaxHeight = 520 },
-            PrimaryButtonText = GuidedAction(guidedStep, current.State, name, repairRequested: false),
+            PrimaryButtonText = "CHECK CONNECTION",
+            SecondaryButtonText = $"OPEN {name.ToUpperInvariant()} EXTENSIONS",
             CloseButtonText = "CANCEL",
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = XamlRoot
         };
         var busy = false;
-        var repairRequested = false;
 
         void Render()
         {
+            var guidedStep = BrowserSetupStepLogic.For(current);
             content.Children.Clear();
-            content.Children.Add(Ui.Text("This lets WorkParcel find the tabs you choose to save. It does not read page contents, passwords or browsing history.", 12, false, "#8D9CA2"));
+            content.Children.Add(Ui.Text($"Connect {name} so WorkParcel can show the tabs you choose when capturing a setup.", 13, true));
             content.Children.Add(GuidedProgress(guidedStep));
             AddGuidedExplanation(content, browser, current, guidedStep);
-            dialog.PrimaryButtonText = GuidedAction(guidedStep, current.State, name, repairRequested);
-            dialog.IsPrimaryButtonEnabled = current.State is not BrowserConnectionState.BrowserMissing;
+            content.Children.Add(extensionFolder);
+            if (current.State is BrowserConnectionState.DesktopConnectionRequired or BrowserConnectionState.ConnectionFailed) content.Children.Add(setupHelp);
+            content.Children.Add(feedback);
+            dialog.IsPrimaryButtonEnabled = true;
+            dialog.IsSecondaryButtonEnabled = true;
         }
+
+        extensionFolder.Click += async (_, _) =>
+        {
+            if (busy) return;
+            busy = true;
+            extensionFolder.IsEnabled = false;
+            feedback.Text = "OPENING EXTENSION FOLDER...";
+            feedback.Foreground = Ui.Brush("#F0B45B");
+            try
+            {
+                var result = OpenExtensionFolder();
+                feedback.Text = result.Succeeded ? "EXTENSION FOLDER OPENED" : result.Message;
+                feedback.Foreground = Ui.Brush(result.Succeeded ? "#9BE28F" : "#EF7777");
+            }
+            catch (Exception exception)
+            {
+                AppLogger.LogTechnicalError(exception);
+                feedback.Text = "EXTENSION FOLDER COULD NOT BE OPENED";
+                feedback.Foreground = Ui.Brush("#EF7777");
+            }
+            finally { busy = false; extensionFolder.IsEnabled = true; }
+        };
+
+        setupHelp.Click += async (_, _) =>
+        {
+            if (busy) return;
+            busy = true;
+            setupHelp.IsEnabled = false;
+            try { await ShowSetupHelpAsync(browser); feedback.Text = "SETUP HELP CLOSED"; feedback.Foreground = Ui.Brush("#9BE28F"); }
+            catch (Exception exception) { AppLogger.LogTechnicalError(exception); feedback.Text = "SETUP HELP COULD NOT BE OPENED"; feedback.Foreground = Ui.Brush("#EF7777"); }
+            finally { busy = false; setupHelp.IsEnabled = true; }
+        };
+
+        dialog.SecondaryButtonClick += async (_, args) =>
+        {
+            args.Cancel = true;
+            if (busy) return;
+            busy = true;
+            dialog.IsSecondaryButtonEnabled = false;
+            feedback.Text = $"OPENING {name.ToUpperInvariant()} EXTENSIONS...";
+            feedback.Foreground = Ui.Brush("#F0B45B");
+            try
+            {
+                var result = ExternalLaunchService.TryOpenBrowserExtensions(browser);
+                feedback.Text = result.Succeeded ? $"{name.ToUpperInvariant()} EXTENSIONS OPENED" : result.Message;
+                feedback.Foreground = Ui.Brush(result.Succeeded ? "#9BE28F" : "#EF7777");
+            }
+            finally { busy = false; dialog.IsSecondaryButtonEnabled = true; }
+        };
 
         dialog.PrimaryButtonClick += async (_, args) =>
         {
             args.Cancel = true;
             if (busy) return;
-            if (current.State is BrowserConnectionState.Connected or BrowserConnectionState.BrowserMissing)
+            if (current.State == BrowserConnectionState.Connected)
             {
                 dialog.Hide();
                 return;
@@ -345,21 +494,29 @@ public sealed partial class SettingsPage : PageBase
 
             busy = true;
             dialog.IsPrimaryButtonEnabled = false;
+            feedback.Text = "CHECKING CONNECTION...";
+            feedback.Foreground = Ui.Brush("#F0B45B");
             try
             {
-                await RunGuidedActionAsync(browser, current, guidedStep, repairRequested);
                 current = await DetectBrowserAsync(browser);
-                if (guidedStep == BrowserSetupStep.TestConnection && current.State == BrowserConnectionState.ConnectionFailed) repairRequested = true;
-                guidedStep = BrowserSetupStepLogic.For(current);
+                if (current.State == BrowserConnectionState.Connected)
+                {
+                    try { await BrowserIntegrationService.Current.ListTabsAsync(browser); }
+                    catch (Exception exception) { AppLogger.LogTechnicalError(exception); }
+                    current = await DetectBrowserAsync(browser);
+                }
+                feedback.Text = ConnectionFeedback(current);
+                feedback.Foreground = Ui.Brush(current.State == BrowserConnectionState.Connected ? "#9BE28F" : "#EF7777");
                 Render();
                 if (current.State == BrowserConnectionState.Connected) await RefreshBrowserAsync();
             }
             catch (Exception exception)
             {
                 AppLogger.LogTechnicalError(exception);
-                content.Children.Add(Ui.Text("WorkParcel could not complete that step. The connection was not assumed to be ready; try the step again.", 12, false, "#EF7777"));
+                feedback.Text = "CONNECTION FAILED - TRY AGAIN";
+                feedback.Foreground = Ui.Brush("#EF7777");
             }
-            finally { busy = false; if (current.State is not BrowserConnectionState.BrowserMissing) dialog.IsPrimaryButtonEnabled = true; }
+            finally { busy = false; dialog.IsPrimaryButtonEnabled = true; }
         };
 
         Render();
@@ -396,10 +553,9 @@ public sealed partial class SettingsPage : PageBase
 
         if (guidedStep == BrowserSetupStep.ConnectDesktop && state.State is BrowserConnectionState.NotConfigured or BrowserConnectionState.ExtensionRequired)
         {
-            content.Children.Add(Ui.Text("The extension was not claimed as installed. If you loaded it, continue by registering the desktop connection.", 12));
+            content.Children.Add(Ui.Text("If you loaded the extension, continue by registering the desktop connection.", 12));
             content.Children.Add(Ui.Text("1. Copy the exact extension ID shown on the browser extensions page.\n2. Run the current-user setup command below.\n3. Return here and continue to the connection check.", 12));
             content.Children.Add(Ui.Mono(SetupCommand(browser), 10));
-            AddLinkAction(content, "OPEN SETUP FOLDER", () => { OpenSetupFolder(); return Task.CompletedTask; });
             return;
         }
 
@@ -421,13 +577,11 @@ public sealed partial class SettingsPage : PageBase
             case BrowserConnectionState.NotConfigured:
                 content.Children.Add(Ui.Text($"Install the extension in {name}, then return here. Browser security requires this manual confirmation; WorkParcel does not pretend the extension was installed for you.", 12));
                 content.Children.Add(Ui.Text("1. Open the browser extensions page and enable Developer mode.\n2. Choose Load unpacked and select the WorkParcel browser-extension folder.\n3. Leave this window open and continue when the extension is ready.", 12));
-                AddLinkAction(content, "OPEN EXTENSION FOLDER", () => { OpenExtensionFolder(); return Task.CompletedTask; });
                 break;
             case BrowserConnectionState.DesktopConnectionRequired:
                 content.Children.Add(Ui.Text("The extension is present, but it is not registered with the WorkParcel desktop connection yet.", 12));
                 content.Children.Add(Ui.Text("The browser assigns the exact extension ID. WorkParcel must use that exact ID when registering the native connection, so this step cannot be safely automated.", 12));
                 content.Children.Add(Ui.Mono(SetupCommand(browser), 10));
-                AddLinkAction(content, "OPEN SETUP FOLDER", () => { OpenSetupFolder(); return Task.CompletedTask; });
                 break;
             case BrowserConnectionState.ReadyToTest:
                 content.Children.Add(Ui.Text("The browser connection is ready. Test it to confirm that WorkParcel can see eligible tabs.", 12));
@@ -442,58 +596,50 @@ public sealed partial class SettingsPage : PageBase
         }
     }
 
-    private async Task RunGuidedActionAsync(string browser, BrowserConnectionStateInfo current, BrowserSetupStep guidedStep, bool repairRequested)
-    {
-        switch (guidedStep)
-        {
-            case BrowserSetupStep.InstallExtension when current.State == BrowserConnectionState.Disabled:
-                BrowserIntegrationService.Current.SetEnabled(true);
-                break;
-            case BrowserSetupStep.InstallExtension:
-                OpenBrowserExtensionsPage(browser);
-                OpenExtensionFolder();
-                break;
-            case BrowserSetupStep.ConnectDesktop:
-                OpenSetupFolder();
-                break;
-            case BrowserSetupStep.TestConnection when current.State == BrowserConnectionState.ConnectionFailed && !repairRequested:
-                OpenBrowserExtensionsPage(browser);
-                OpenExtensionFolder();
-                if (!current.Details.HostInstalled) OpenSetupFolder();
-                break;
-            case BrowserSetupStep.TestConnection:
-                await TestBrowserConnectionAsync(browser, false);
-                break;
-        }
-    }
-
-    private async Task TestBrowserConnectionAsync(string browser, bool showMessage)
+    private async Task<bool> TestBrowserConnectionAsync(string browser, bool showMessage, TextBlock? feedback = null)
     {
         try
         {
             var before = await DetectBrowserAsync(browser);
             if (before.State != BrowserConnectionState.Connected)
             {
+                SetConnectionFeedback(feedback, before);
                 if (showMessage) await Dialogs.ShowMessage(this, "CONNECTION NEEDS ATTENTION", StateDescription(before.State, before.Details, BrowserName(browser)));
-                return;
+                return false;
             }
 
             var tabs = await BrowserIntegrationService.Current.ListTabsAsync(browser);
             var after = await DetectBrowserAsync(browser);
             if (after.State != BrowserConnectionState.Connected)
             {
+                SetConnectionFeedback(feedback, after);
                 if (showMessage) await Dialogs.ShowMessage(this, "CONNECTION NEEDS ATTENTION", StateDescription(after.State, after.Details, BrowserName(browser)));
-                return;
+                return false;
             }
             var supported = tabs.Count(tab => BrowserTabRules.IsAllowedForCapture(tab));
+            SetConnectionFeedback(feedback, after);
             if (showMessage) await Dialogs.ShowMessage(this, $"{BrowserName(browser).ToUpperInvariant()} CONNECTED", $"{supported} eligible HTTP/HTTPS tab{(supported == 1 ? string.Empty : "s")} available. Private and browser-internal pages are excluded.");
+            return true;
         }
         catch (Exception exception)
         {
             AppLogger.LogTechnicalError(exception);
+            if (feedback is not null)
+            {
+                feedback.Text = "CONNECTION FAILED";
+                feedback.Foreground = Ui.Brush("#EF7777");
+            }
             if (showMessage) await Dialogs.ShowMessage(this, "CONNECTION NEEDS ATTENTION", "The browser extension or desktop connection did not respond. Reconnect and try again.");
+            return false;
         }
         finally { await RefreshBrowserAsync(); }
+    }
+
+    private static void SetConnectionFeedback(TextBlock? feedback, BrowserConnectionStateInfo state)
+    {
+        if (feedback is null) return;
+        feedback.Text = ConnectionFeedback(state);
+        feedback.Foreground = Ui.Brush(state.State == BrowserConnectionState.Connected ? "#9BE28F" : "#EF7777");
     }
 
     private async Task<BrowserConnectionStateInfo> DetectBrowserAsync(string browser) => await Task.Run(() => BrowserIntegrationService.Current.GetConnectionState(browser));
@@ -509,7 +655,7 @@ public sealed partial class SettingsPage : PageBase
 
     private async Task ShowBrowserHowItWorksAsync(string browser)
     {
-        await Dialogs.ShowMessage(this, $"HOW {BrowserName(browser).ToUpperInvariant()} CONNECTION WORKS", $"WorkParcel uses an optional browser extension to show eligible open tabs when you capture a setup. You choose which tabs to save. The extension sends tab metadata to WorkParcel over the local desktop connection; page contents, passwords, cookies and full browsing history are not read. You can disconnect {BrowserName(browser)} at any time without deleting saved parcels or browser tabs.");
+        await Dialogs.ShowBrowserTabsHowItWorksAsync(this);
     }
 
     private async Task ShowDiagnosticsAsync(string browser, BrowserConnectionStateInfo state)
@@ -522,10 +668,10 @@ public sealed partial class SettingsPage : PageBase
     private async Task ShowSetupHelpAsync(string browser)
     {
         var name = BrowserName(browser).ToUpperInvariant();
-        var extensionFolder = FindPath("browser-extension");
-        var hostExecutable = FindPath(Path.Combine("BrowserHost", "WorkParcel.BrowserHost.exe"));
-        var setupScript = FindPath(Path.Combine("BrowserHost", "Setup-BrowserHost.ps1")) ?? FindPath(Path.Combine("tools", "Setup-BrowserHost.ps1"));
-        var folderLine = extensionFolder is null ? "Select the browser-extension folder shipped with this build." : extensionFolder;
+        var extensionFolder = InstalledResourcePathResolver.FindFromAppBase("browser-extension");
+        var hostExecutable = InstalledResourcePathResolver.FindFromAppBase(Path.Combine("BrowserHost", "WorkParcel.BrowserHost.exe"));
+        var setupScript = InstalledResourcePathResolver.FindFromAppBase(Path.Combine("BrowserHost", "Setup-BrowserHost.ps1"));
+        var folderLine = extensionFolder ?? "The browser-extension folder was not included in this installation.";
         var command = SetupCommand(browser, setupScript, hostExecutable, name);
         await Dialogs.ShowMessage(this, $"CONNECT {name}", $"1. Load this folder as an unpacked extension:\n{folderLine}\n\n2. Copy the exact extension ID shown by {name}.\n\n3. Run this current-user setup command:\n{command}\n\n4. Return to WorkParcel and choose CHECK CONNECTION. The exact ID is required by browser security; WorkParcel will never register a wildcard origin.");
     }
@@ -533,8 +679,8 @@ public sealed partial class SettingsPage : PageBase
     private static string SetupCommand(string browser)
     {
         var name = BrowserName(browser).ToUpperInvariant();
-        var hostExecutable = FindPath(Path.Combine("BrowserHost", "WorkParcel.BrowserHost.exe"));
-        var setupScript = FindPath(Path.Combine("BrowserHost", "Setup-BrowserHost.ps1")) ?? FindPath(Path.Combine("tools", "Setup-BrowserHost.ps1"));
+        var hostExecutable = InstalledResourcePathResolver.FindFromAppBase(Path.Combine("BrowserHost", "WorkParcel.BrowserHost.exe"));
+        var setupScript = InstalledResourcePathResolver.FindFromAppBase(Path.Combine("BrowserHost", "Setup-BrowserHost.ps1"));
         return SetupCommand(browser, setupScript, hostExecutable, name);
     }
 
@@ -545,48 +691,31 @@ public sealed partial class SettingsPage : PageBase
             : "Run the Setup-BrowserHost.ps1 file shipped with this build using the WorkParcel.BrowserHost.exe beside it.";
     }
 
-    private static void OpenSetupFolder()
+    private static ExternalLaunchResult OpenExtensionFolder()
     {
-        try
-        {
-            var path = FindPath("BrowserHost") ?? FindPath("tools");
-            if (path is null) throw new DirectoryNotFoundException("The browser setup files are not included with this build.");
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-        }
-        catch (Exception exception) { AppLogger.LogTechnicalError(exception); }
+        var path = InstalledResourcePathResolver.FindFromAppBase("browser-extension");
+        return path is null
+            ? ExternalLaunchResult.Failure("browser-extension", "The WorkParcel browser extension was not included in this installation. Expected a browser-extension folder beside WorkParcel.exe.")
+            : ExternalLaunchService.TryOpenFolder(path);
     }
 
-    private static void OpenBrowserExtensionsPage(string browser)
+    private static Task OpenExtensionFolderAsync(TextBlock feedback)
     {
-        try
-        {
-            var executable = BrowserInstallationService.FindExecutable(browser);
-            if (executable is null) return;
-            Process.Start(new ProcessStartInfo(executable) { Arguments = "--new-tab " + (browser == "edge" ? "edge://extensions/" : "chrome://extensions/"), UseShellExecute = true });
-        }
-        catch (Exception exception) { AppLogger.LogTechnicalError(exception); }
+        var result = OpenExtensionFolder();
+        if (!result.Succeeded) throw new UserFacingActionException(result.Message);
+        return Task.CompletedTask;
     }
 
-    private static void OpenExtensionFolder()
+    private static string ConnectionFeedback(BrowserConnectionStateInfo state) => state.State switch
     {
-        try
-        {
-            var path = FindPath("browser-extension");
-            if (path is null) throw new DirectoryNotFoundException("The browser-extension folder is not included with this build.");
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-        }
-        catch (Exception exception) { AppLogger.LogTechnicalError(exception); }
-    }
-
-    private static string? FindPath(string relativePath)
-    {
-        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
-        {
-            var candidate = Path.Combine(directory.FullName, relativePath);
-            if (Directory.Exists(candidate) || File.Exists(candidate)) return candidate;
-        }
-        return null;
-    }
+        BrowserConnectionState.Connected => "CONNECTED",
+        BrowserConnectionState.ExtensionRequired => "EXTENSION NOT DETECTED",
+        BrowserConnectionState.DesktopConnectionRequired => "DESKTOP CONNECTION UNAVAILABLE",
+        BrowserConnectionState.BrowserMissing => "BROWSER UNAVAILABLE",
+        BrowserConnectionState.ConnectionFailed => "CONNECTION FAILED",
+        BrowserConnectionState.Disabled => "BROWSER TAB CAPTURE IS DISABLED",
+        _ => "CONNECTION NOT READY"
+    };
 
     private UIElement TabPrivacy()
     {
@@ -596,21 +725,47 @@ public sealed partial class SettingsPage : PageBase
 
         var capture = new CheckBox { Content = "Allow browser tab capture\nShow eligible browser tabs when capturing a setup.", IsChecked = service.IsEnabled, IsThreeState = false };
         _captureToggle = capture;
-        capture.Checked += (_, _) => { if (!_updatingPrivacy) service.SetEnabled(true); };
-        capture.Unchecked += (_, _) => { if (!_updatingPrivacy) service.SetEnabled(false); };
+        var feedback = Ui.Text("READY", 10, false, "#8D9CA2");
+        capture.Checked += (_, _) =>
+        {
+            if (_updatingPrivacy) return;
+            service.SetEnabled(true);
+            feedback.Text = "BROWSER TAB CAPTURE ENABLED";
+            feedback.Foreground = Ui.Brush("#9BE28F");
+        };
+        capture.Unchecked += (_, _) =>
+        {
+            if (_updatingPrivacy) return;
+            service.SetEnabled(false);
+            feedback.Text = "BROWSER TAB CAPTURE DISABLED";
+            feedback.Foreground = Ui.Brush("#F0B45B");
+        };
         stack.Children.Add(capture);
 
         var closing = new CheckBox { Content = "Close selected tabs when packing away\nOnly tabs saved in that parcel may be closed.", IsChecked = service.TabClosingEnabled, IsThreeState = false };
         _tabClosingToggle = closing;
-        closing.Checked += (_, _) => { if (!_updatingPrivacy) service.SetTabClosingEnabled(true); };
-        closing.Unchecked += (_, _) => { if (!_updatingPrivacy) service.SetTabClosingEnabled(false); };
+        closing.Checked += (_, _) =>
+        {
+            if (_updatingPrivacy) return;
+            service.SetTabClosingEnabled(true);
+            feedback.Text = "SELECTED TAB CLOSING ENABLED";
+            feedback.Foreground = Ui.Brush("#9BE28F");
+        };
+        closing.Unchecked += (_, _) =>
+        {
+            if (_updatingPrivacy) return;
+            service.SetTabClosingEnabled(false);
+            feedback.Text = "SELECTED TAB CLOSING DISABLED";
+            feedback.Foreground = Ui.Brush("#F0B45B");
+        };
         stack.Children.Add(closing);
 
         stack.Children.Add(new CheckBox { Content = "Exclude private browsing\nIncognito and InPrivate tabs are never captured.", IsChecked = true, IsEnabled = false, IsThreeState = false });
         var stores = Ui.LinkButton("WHAT WORKPARCEL STORES");
         stores.HorizontalAlignment = HorizontalAlignment.Left;
-        stores.Click += async (_, _) => await ShowWhatStoresAsync();
+        stores.Click += async (_, _) => await RunButtonActionAsync(stores, feedback, "OPENING", ShowWhatStoresAsync, "STORAGE DETAILS CLOSED");
         stack.Children.Add(stores);
+        stack.Children.Add(feedback);
         return stack;
     }
 
@@ -619,7 +774,7 @@ public sealed partial class SettingsPage : PageBase
         await Dialogs.ShowMessage(this, "WHAT WORKPARCEL STORES", "WorkParcel may store:\n- Tab title\n- URL\n- Browser type\n- Tab order\n- Pinned state\n- Browser-window grouping\n\nWorkParcel does not intentionally store:\n- Passwords\n- Cookies\n- Form contents\n- Page contents\n- Keystrokes\n- Full browser history");
     }
 
-    private async Task ClearIconCacheAsync()
+    private async Task ClearIconCacheAsync(TextBlock? feedback = null)
     {
         try
         {
@@ -628,14 +783,25 @@ public sealed partial class SettingsPage : PageBase
             Store.Paths.EnsureDirectories();
             await Dialogs.ShowMessage(this, "ICON CACHE CLEARED", "Local file and application icons were removed. Saved browser records were not changed.");
         }
-        catch (Exception exception) { AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "CACHE NOT CLEARED", "The favicon cache could not be removed. Your saved tabs were not changed."); }
+        catch (Exception exception)
+        {
+            AppLogger.LogTechnicalError(exception);
+            if (feedback is not null)
+            {
+                feedback.Text = "CACHE NOT CLEARED";
+                feedback.Foreground = Ui.Brush("#EF7777");
+            }
+            await Dialogs.ShowMessage(this, "CACHE NOT CLEARED", "The favicon cache could not be removed. Your saved tabs were not changed.");
+        }
     }
 
     private UIElement About()
     {
         var stack = Ui.Stack(4);
         stack.Children.Add(Ui.Text("WorkParcel", 14, true));
-        stack.Children.Add(Ui.Mono($"VERSION {typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.2.0"}", 10));
+        var version = typeof(App).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "0.2.0-beta.2";
+        version = version.Replace("-beta.", " Beta ", StringComparison.OrdinalIgnoreCase).Replace("-", " ", StringComparison.OrdinalIgnoreCase);
+        stack.Children.Add(Ui.Mono($"VERSION {version.ToUpperInvariant()}", 10));
         stack.Children.Add(Ui.Mono("LOCAL PARCEL UTILITY", 10));
         stack.Children.Add(Ui.Text("Save a setup. Open it when you return.", 12, false, "#8D9CA2"));
         return stack;
@@ -654,15 +820,32 @@ public sealed partial class SettingsPage : PageBase
             _data.Children.Add(Ui.Mono($"DATA FOLDER   {Store.Paths.DataDirectory}", 10));
             _data.Children.Add(Ui.Mono($"LAST INITIALIZED   {Store.LastSuccessfulInitializationUtc?.ToLocalTime():g}", 10));
             var row = Ui.Row();
+            var feedback = Ui.Text("READY", 10, false, "#8D9CA2");
             var open = Ui.Button("OPEN DATA FOLDER");
-            open.Click += (_, _) => { try { Process.Start(new ProcessStartInfo(Store.Paths.DataDirectory) { UseShellExecute = true }); } catch (Exception exception) { AppLogger.LogTechnicalError(exception); } };
+            open.Click += async (_, _) => await RunButtonActionAsync(open, feedback, "OPENING", () => OpenDataFolderAsync(feedback), "DATA FOLDER OPENED");
             var backup = Ui.Button("BACK UP DATA");
-            backup.Click += async (_, _) => { try { await Store.BackupAsync(); await Dialogs.ShowMessage(this, "BACKUP CREATED", "A new SQLite backup was saved without overwriting an earlier backup."); } catch (Exception exception) { AppLogger.LogTechnicalError(exception); await Dialogs.ShowMessage(this, "BACKUP FAILED", "The local database could not be backed up."); } };
+            backup.Click += async (_, _) => await RunButtonActionAsync(backup, feedback, "BACKING UP", async () =>
+            {
+                await Store.BackupAsync();
+                await Dialogs.ShowMessage(this, "BACKUP CREATED", "A new SQLite backup was saved without overwriting an earlier backup.");
+            }, "BACKUP CREATED");
             var clear = Ui.Button("CLEAR ICON CACHE");
-            clear.Click += async (_, _) => await ClearIconCacheAsync();
-            row.Children.Add(open); row.Children.Add(backup); row.Children.Add(clear); _data.Children.Add(row);
+            clear.Click += async (_, _) => await RunButtonActionAsync(clear, feedback, "CLEARING", () => ClearIconCacheAsync(feedback), "CACHE CLEARED");
+            row.Children.Add(open); row.Children.Add(backup); row.Children.Add(clear); _data.Children.Add(row); _data.Children.Add(feedback);
         }
         catch (Exception exception) { AppLogger.LogTechnicalError(exception); _data.Children.Clear(); _data.Children.Add(Ui.Text("Local data information is unavailable.", 12, false, "#F0B45B")); }
+    }
+
+    private static Task OpenDataFolderAsync(TextBlock feedback)
+    {
+        var result = ExternalLaunchService.TryOpenFolder(WorkspaceStore.Current.Paths.DataDirectory);
+        if (!result.Succeeded) throw new UserFacingActionException(result.Message);
+        return Task.CompletedTask;
+    }
+
+    private sealed class UserFacingActionException : Exception
+    {
+        public UserFacingActionException(string message) : base(message) { }
     }
 
     private static string BrowserName(string browser) => browser.Equals("edge", StringComparison.OrdinalIgnoreCase) ? "Edge" : "Chrome";
@@ -670,17 +853,19 @@ public sealed partial class SettingsPage : PageBase
     private static string StateTitle(BrowserConnectionState state, string browser) => state switch
     {
         BrowserConnectionState.Connected => "Connected",
-        BrowserConnectionState.ConnectionFailed => "Connection needs attention",
-        BrowserConnectionState.BrowserMissing => $"{browser} was not found",
-        BrowserConnectionState.ExtensionRequired or BrowserConnectionState.DesktopConnectionRequired or BrowserConnectionState.ReadyToTest => "Setup in progress",
+        BrowserConnectionState.ExtensionRequired => "Extension not detected",
+        BrowserConnectionState.DesktopConnectionRequired => "Desktop connection unavailable",
+        BrowserConnectionState.BrowserMissing => "Browser unavailable",
+        BrowserConnectionState.ConnectionFailed => "Connection failed",
         BrowserConnectionState.Disabled => "Not connected",
+        BrowserConnectionState.ReadyToTest => "Connection ready to test",
         _ => "Not connected"
     };
 
     private static string StateDescription(BrowserConnectionState state, BrowserConnectionInfo? info, string browser) => state switch
     {
         BrowserConnectionState.Connected => $"Your open {browser} windows and tabs are ready to capture.",
-        BrowserConnectionState.BrowserMissing => $"{browser} was not found on this computer.",
+        BrowserConnectionState.BrowserMissing => $"{browser} is not installed or could not be found on this computer.",
         BrowserConnectionState.ExtensionRequired => $"Install the WorkParcel extension in {browser}, then return here to continue.",
         BrowserConnectionState.DesktopConnectionRequired => "The browser extension is installed, but it cannot reach the WorkParcel desktop app yet.",
         BrowserConnectionState.ReadyToTest => "The browser connection is ready. Test it before capturing tabs.",

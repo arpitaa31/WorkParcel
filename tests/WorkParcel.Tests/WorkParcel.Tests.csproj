@@ -24,6 +24,7 @@
     <Compile Include="..\..\src\WorkParcel.App\Models\WorkModels.cs" Link="Models\WorkModels.cs" />
     <Compile Include="..\..\src\WorkParcel.App\Services\AppDataPaths.cs" Link="Services\AppDataPaths.cs" />
     <Compile Include="..\..\src\WorkParcel.App\Services\AppLogger.cs" Link="Services\AppLogger.cs" />
+    <Compile Include="..\..\src\WorkParcel.App\Services\ExternalLaunchService.cs" Link="Services\ExternalLaunchService.cs" />
     <Compile Include="..\..\src\WorkParcel.App\Services\SqliteDatabase.cs" Link="Services\SqliteDatabase.cs" />
     <Compile Include="..\..\src\WorkParcel.App\Services\WorkspaceRepository.cs" Link="Services\WorkspaceRepository.cs" />
     <Compile Include="..\..\src\WorkParcel.App\Services\WorkspaceStore.cs" Link="Services\WorkspaceStore.cs" />
