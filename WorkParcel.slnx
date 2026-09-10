@@ -1,8 +1,6 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/WorkParcel.App/WorkParcel.App.csproj" />
-    <Project Path="src/WorkParcel.Core/WorkParcel.Core.csproj" />
-    <Project Path="src/WorkParcel.BrowserHost/WorkParcel.BrowserHost.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/WorkParcel.Tests/WorkParcel.Tests.csproj" />

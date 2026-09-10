@@ -124,15 +124,23 @@ public sealed record ItemOpenResult(Guid ItemId, ItemOpenStatus Status, string M
 
 public sealed class ItemLaunchService
 {
+    private readonly Func<ProcessStartInfo, bool> _start;
+
+    public ItemLaunchService(Func<ProcessStartInfo, bool>? start = null) => _start = start ?? (info => Process.Start(info) is not null);
+
     public IReadOnlyList<ParcelItem> BuildPlan(IEnumerable<ParcelItem> selected)
     {
-        var plan = new List<ParcelItem>(); var launchedApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var plan = new List<ParcelItem>(); var launchedApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase); var launchedLinks = new HashSet<string>(StringComparer.Ordinal);
         foreach (var item in selected)
         {
             if (item.IsMissing || item.IsInaccessible || !item.LaunchEnabled || item.ItemType == ParcelItemType.Note) continue;
             if (item.ItemType == ParcelItemType.Application)
             {
                 var app = WindowsPathIdentity.Normalize(item.ExecutablePath ?? item.Value); if (app is null || !launchedApps.Add(app)) continue;
+            }
+            else if (item.ItemType == ParcelItemType.WebLink)
+            {
+                if (!WebLinkRules.TryNormalize(item.Value, out var link) || !launchedLinks.Add(link.AbsoluteUri)) continue;
             }
             plan.Add(item);
         }
@@ -162,7 +170,7 @@ public sealed class ItemLaunchService
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var info = BuildStartInfo(item); Process.Start(info); results.Add(new ItemOpenResult(item.Id, ItemOpenStatus.Opened, "Open request sent"));
+                var info = BuildStartInfo(item); if (!_start(info)) throw new InvalidOperationException("Windows did not accept the open request."); results.Add(new ItemOpenResult(item.Id, ItemOpenStatus.Opened, "Open request sent"));
             }
             catch (Exception exception) when (exception is System.ComponentModel.Win32Exception or InvalidOperationException or FileNotFoundException or DirectoryNotFoundException)
             {
@@ -175,7 +183,7 @@ public sealed class ItemLaunchService
 
     public static IReadOnlyDictionary<ItemOpenStatus, int> Summarize(IEnumerable<ItemOpenResult> results) => results.GroupBy(result => result.Status).ToDictionary(group => group.Key, group => group.Count());
 
-    internal static ProcessStartInfo BuildStartInfo(ParcelItem item)
+    public static ProcessStartInfo BuildStartInfo(ParcelItem item)
     {
         Uri? link = null;
         if (item.ItemType == ParcelItemType.WebLink && !WebLinkRules.TryNormalize(item.Value, out link)) throw new InvalidOperationException("Unsafe or invalid link.");

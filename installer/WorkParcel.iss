@@ -3,30 +3,30 @@
 #endif
 
 #ifndef ReleaseLabel
-#define ReleaseLabel "0.2.0-beta.2"
+#define ReleaseLabel "0.2.0-beta.3"
 #endif
 
 #ifndef StageDir
-#define StageDir "..\artifacts\release\0.2.0-beta.2\staging\installer"
+#define StageDir "..\artifacts\release\0.2.0-beta.3\staging\installer"
 #endif
 
 #ifndef ReleaseDir
-#define ReleaseDir "..\artifacts\release\0.2.0-beta.2"
+#define ReleaseDir "..\artifacts\release\0.2.0-beta.3"
 #endif
 
 [Setup]
 AppId={{7B06D1B1-0A7E-4A4B-9AA5-1D3B6F5D0A10}
 AppName=WorkParcel
 AppVersion={#AppVersion}
-AppVerName=WorkParcel 0.2.0 Beta 2
+AppVerName=WorkParcel 0.2.0 Beta 3
 AppPublisher=Arpitaa
 AppPublisherURL=https://github.com/arpitaa31/WorkParcel
-AppComments=Save a work setup and reopen it later
+AppComments=Save the apps, files, folders and web links connected to a task, pack the setup away and reopen it later.
 AppCopyright=Copyright (c) Arpitaa
 VersionInfoVersion=0.2.0.0
-VersionInfoTextVersion=0.2.0 Beta 2
+VersionInfoTextVersion=0.2.0 Beta 3
 VersionInfoCompany=Arpitaa
-VersionInfoDescription=Save a work setup and reopen it later
+VersionInfoDescription=Save the apps, files, folders and web links connected to a task, pack the setup away and reopen it later.
 VersionInfoProductName=WorkParcel
 VersionInfoProductVersion=0.2.0.0
 VersionInfoCopyright=Copyright (c) Arpitaa
@@ -57,9 +57,17 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 
 [Files]
 Source: "{#StageDir}\App\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
-Source: "{#StageDir}\BrowserHost\*"; DestDir: "{app}\BrowserHost"; Flags: recursesubdirs ignoreversion
-Source: "{#StageDir}\browser-extension\*"; DestDir: "{app}\browser-extension"; Flags: recursesubdirs ignoreversion
 Source: "{#StageDir}\Documentation\*"; DestDir: "{app}\Documentation"; Flags: recursesubdirs ignoreversion
+
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\BrowserHost"
+Type: filesandordirs; Name: "{app}\browser-extension"
+Type: files; Name: "{app}\Documentation\BROWSER-EXTENSION-SETUP.md"
+Type: files; Name: "{app}\Documentation\Browser-Extension-Setup.md"
+
+[InstallRun]
+Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Google\Chrome\NativeMessagingHosts\com.workparcel.browser"" /f"; Flags: runhidden
+Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.workparcel.browser"" /f"; Flags: runhidden
 
 [Icons]
 Name: "{group}\WorkParcel"; Filename: "{app}\WorkParcel.exe"; WorkingDir: "{app}"; IconFilename: "{app}\WorkParcel.exe"; Comment: "Save a setup. Open it when you return."
@@ -68,3 +76,12 @@ Name: "{autodesktop}\WorkParcel"; Filename: "{app}\WorkParcel.exe"; WorkingDir: 
 [Run]
 Filename: "{app}\WorkParcel.exe"; Description: "Launch WorkParcel"; Flags: nowait postinstall skipifsilent
 
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\BrowserHost"
+Type: filesandordirs; Name: "{app}\browser-extension"
+Type: files; Name: "{app}\Documentation\BROWSER-EXTENSION-SETUP.md"
+Type: files; Name: "{app}\Documentation\Browser-Extension-Setup.md"
+
+[UninstallRun]
+Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Google\Chrome\NativeMessagingHosts\com.workparcel.browser"" /f"; Flags: runhidden; RunOnceId: "RemoveObsoleteChromeRegistration"
+Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.workparcel.browser"" /f"; Flags: runhidden; RunOnceId: "RemoveObsoleteEdgeRegistration"

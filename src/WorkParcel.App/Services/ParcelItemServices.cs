@@ -29,7 +29,7 @@ public static class WindowsPathIdentity
     }
 }
 
-public sealed record ParsedLinks(IReadOnlyList<Uri> Valid, IReadOnlyList<string> Invalid);
+public sealed record ParsedLinks(IReadOnlyList<Uri> Valid, IReadOnlyList<string> Invalid, IReadOnlyList<int> InvalidLineNumbers);
 
 public static class WebLinkRules
 {
@@ -37,22 +37,35 @@ public static class WebLinkRules
     {
         uri = null!;
         if (string.IsNullOrWhiteSpace(value) || !Uri.TryCreate(value.Trim(), UriKind.Absolute, out var parsed)) return false;
-        if (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps) return false;
+        if (!string.Equals(parsed.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) && !string.Equals(parsed.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)) return false;
         if (string.IsNullOrWhiteSpace(parsed.Host)) return false;
         uri = parsed;
         return true;
     }
 
+    public static string Identity(Uri uri)
+    {
+        var builder = new UriBuilder(uri)
+        {
+            Scheme = uri.Scheme.ToLowerInvariant(),
+            Host = uri.Host.ToLowerInvariant(),
+            Port = uri.IsDefaultPort ? -1 : uri.Port
+        };
+        return builder.Uri.AbsoluteUri;
+    }
+
     public static ParsedLinks ParseMany(string? text)
     {
-        var good = new List<Uri>(); var bad = new List<string>(); var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var good = new List<Uri>(); var bad = new List<string>(); var badLineNumbers = new List<int>(); var seen = new HashSet<string>(StringComparer.Ordinal);
+        var lineNumber = 0;
         foreach (var line in (text ?? string.Empty).Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None))
         {
+            lineNumber++;
             var value = line.Trim(); if (value.Length == 0) continue;
-            if (!TryNormalize(value, out var uri)) { bad.Add(value); continue; }
-            if (seen.Add(uri.AbsoluteUri)) good.Add(uri);
+            if (!TryNormalize(value, out var uri)) { bad.Add(value); badLineNumbers.Add(lineNumber); continue; }
+            if (seen.Add(Identity(uri))) good.Add(uri);
         }
-        return new ParsedLinks(good, bad);
+        return new ParsedLinks(good, bad, badLineNumbers);
     }
 }
 
@@ -115,7 +128,7 @@ public sealed class ParcelItemFactory
     {
         if (!WebLinkRules.TryNormalize(url, out var uri)) throw new ArgumentException("Only valid HTTP and HTTPS links can be saved.", nameof(url));
         var now = DateTime.Now;
-        return new ParcelItem { ParcelId = parcelId, ItemType = ParcelItemType.WebLink, DisplayName = string.IsNullOrWhiteSpace(displayName) ? uri.Host : displayName.Trim(), Value = uri.AbsoluteUri, NormalizedIdentity = uri.AbsoluteUri, SecondaryDetail = string.IsNullOrWhiteSpace(detail) ? uri.Host : detail.Trim(), CreatedAt = now, UpdatedAt = now, LastVerifiedAt = now, SortOrder = sortOrder };
+        return new ParcelItem { ParcelId = parcelId, ItemType = ParcelItemType.WebLink, DisplayName = string.IsNullOrWhiteSpace(displayName) ? uri.Host : displayName.Trim(), Value = uri.AbsoluteUri, NormalizedIdentity = WebLinkRules.Identity(uri), SecondaryDetail = string.IsNullOrWhiteSpace(detail) ? uri.Host : detail.Trim(), CreatedAt = now, UpdatedAt = now, LastVerifiedAt = now, SortOrder = sortOrder };
     }
 
     public ParcelItem Note(Guid parcelId, string? title, string content, int sortOrder)
@@ -160,8 +173,12 @@ public sealed class ItemAvailabilityService
 
 public static class ParcelItemIdentity
 {
-    public static bool IsDuplicate(IEnumerable<ParcelItem> existing, ParcelItem candidate, Guid? ignoreId = null) =>
-        candidate.ItemType != ParcelItemType.ApplicationWindow && candidate.NormalizedIdentity is not null && existing.Any(item => item.Id != ignoreId && item.ItemType == candidate.ItemType && item.NormalizedIdentity is not null && string.Equals(item.NormalizedIdentity, candidate.NormalizedIdentity, candidate.ItemType is ParcelItemType.WebLink or ParcelItemType.BrowserTab ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase));
+    public static bool IsDuplicate(IEnumerable<ParcelItem> existing, ParcelItem candidate, Guid? ignoreId = null)
+    {
+        if (candidate.ItemType == ParcelItemType.ApplicationWindow || candidate.NormalizedIdentity is null) return false;
+        var comparison = candidate.ItemType == ParcelItemType.WebLink ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        return existing.Any(item => item.Id != ignoreId && item.ItemType == candidate.ItemType && item.NormalizedIdentity is not null && string.Equals(item.NormalizedIdentity, candidate.NormalizedIdentity, comparison));
+    }
 }
 
 public static class ParcelItemRelinker

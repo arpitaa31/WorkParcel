@@ -10,18 +10,15 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $propsPath = Join-Path $repoRoot 'Directory.Build.props'
 $solutionPath = Join-Path $repoRoot 'WorkParcel.slnx'
 $appProjectPath = Join-Path $repoRoot 'src\WorkParcel.App\WorkParcel.App.csproj'
-$hostProjectPath = Join-Path $repoRoot 'src\WorkParcel.BrowserHost\WorkParcel.BrowserHost.csproj'
-$extensionSource = Join-Path $repoRoot 'browser-extension'
-$browserGuideSource = Join-Path $repoRoot 'docs\BROWSER-EXTENSION-SETUP.md'
+$releaseVersion = '0.2.0-beta.3'
+$releaseNotesSource = Join-Path $repoRoot 'docs\RELEASE-NOTES-0.2.0-beta.3.md'
 $troubleshootingSource = Join-Path $repoRoot 'docs\INSTALLATION-TROUBLESHOOTING.md'
 $portableReadmeSource = Join-Path $repoRoot 'docs\PORTABLE-README.md'
 
 function Invoke-RequiredCommand([string]$FilePath, [string[]]$Arguments) {
     Write-Host (">> {0} {1}" -f $FilePath, ($Arguments -join ' '))
     & $FilePath @Arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "Required command failed with exit code ${LASTEXITCODE}: $FilePath"
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Required command failed with exit code $($LASTEXITCODE): $FilePath" }
 }
 
 function Assert-File([string]$Path) {
@@ -33,6 +30,7 @@ function Assert-Directory([string]$Path) {
 }
 
 function Copy-DirectoryContents([string]$Source, [string]$Destination) {
+    Assert-Directory $Source
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     Get-ChildItem -LiteralPath $Source -Force | Copy-Item -Destination $Destination -Recurse -Force
 }
@@ -42,9 +40,12 @@ function Get-InnoSetupCompiler {
     if ($null -ne $command) { return $command.Source }
 
     $candidateRoots = @()
-    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles})) { $candidateRoots += ${env:ProgramFiles} }
-    if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) { $candidateRoots += ${env:ProgramFiles(x86)} }
-    if (-not [string]::IsNullOrWhiteSpace(${env:LOCALAPPDATA})) { $candidateRoots += (Join-Path ${env:LOCALAPPDATA} 'Programs') }
+    $programFiles = [Environment]::GetEnvironmentVariable('ProgramFiles')
+    $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+    if (-not [string]::IsNullOrWhiteSpace($programFiles)) { $candidateRoots += $programFiles }
+    if (-not [string]::IsNullOrWhiteSpace($programFilesX86)) { $candidateRoots += $programFilesX86 }
+    if (-not [string]::IsNullOrWhiteSpace($localAppData)) { $candidateRoots += (Join-Path $localAppData 'Programs') }
     foreach ($root in ($candidateRoots | Sort-Object -Unique)) {
         $candidate = Get-ChildItem -LiteralPath $root -Directory -Filter 'Inno Setup*' -ErrorAction SilentlyContinue |
             ForEach-Object { Join-Path $_.FullName 'ISCC.exe' } |
@@ -55,15 +56,34 @@ function Get-InnoSetupCompiler {
     return $null
 }
 
-if (-not (Test-Path -LiteralPath $propsPath -PathType Leaf)) { throw "Version source not found: $propsPath" }
+function Assert-CleanPath([string]$Path) {
+    $forbidden = '(?i)(^|[\\/])(BrowserHost|browser-extension|Setup-BrowserHost\.ps1|BrowserTab|favicon)([\\/]|$)|(^|[\\/])(\.git|obj|bin|TestResults)([\\/]|$)|(^|[\\/])\.env([.\\/]|$)|\.(db|log|pdb)$'
+    foreach ($entry in (Get-ChildItem -LiteralPath $Path -Recurse -Force)) {
+        if ($entry.FullName -match $forbidden) { throw "Forbidden release content found: $($entry.FullName)" }
+    }
+}
+
+function Assert-CleanArchive([string]$Path) {
+    Assert-File $Path
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        if ($archive.Entries.Count -eq 0) { throw "Archive is empty: $Path" }
+        foreach ($entry in $archive.Entries) {
+            if ($entry.FullName -match '(?i)(BrowserHost|browser-extension|Setup-BrowserHost\.ps1|BrowserTab|favicon)|(^|[\\/])(\.git|obj|bin|TestResults)([\\/]|$)|(^|[\\/])\.env([.\\/]|$)|\.(db|log|pdb)$') {
+                throw "Forbidden release entry '$($entry.FullName)' found in $Path"
+            }
+        }
+    } finally { $archive.Dispose() }
+}
+
+Assert-File $propsPath
 [xml]$props = Get-Content -LiteralPath $propsPath -Raw
 $version = [string]$props.Project.PropertyGroup.VersionPrefix
-$releaseVersion = [string]$props.Project.PropertyGroup.ReleaseVersion
+$propsReleaseVersion = [string]$props.Project.PropertyGroup.ReleaseVersion
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Directory.Build.props must contain a three-part VersionPrefix; found '$version'." }
-if ($releaseVersion -ne '0.2.0-beta.2') { throw "This release script is for 0.2.0-beta.2; found '$releaseVersion'." }
-$releaseNotesSource = Join-Path $repoRoot ("docs\RELEASE-NOTES-{0}.md" -f $releaseVersion)
+if ($propsReleaseVersion -ne $releaseVersion) { throw "Directory.Build.props must target $releaseVersion; found '$propsReleaseVersion'." }
 
-foreach ($requiredPath in @($solutionPath, $appProjectPath, $hostProjectPath, $extensionSource, $releaseNotesSource, $browserGuideSource, $troubleshootingSource, $portableReadmeSource)) {
+foreach ($requiredPath in @($solutionPath, $appProjectPath, $releaseNotesSource, $troubleshootingSource, $portableReadmeSource)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) { throw "Required release input is missing: $requiredPath" }
 }
 
@@ -71,107 +91,68 @@ $releaseRoot = Join-Path $repoRoot ("artifacts\release\{0}" -f $releaseVersion)
 $stagingRoot = Join-Path $releaseRoot 'staging'
 $installerStage = Join-Path $stagingRoot 'installer'
 $portableStage = Join-Path $stagingRoot ("WorkParcel-Portable-{0}-win-x64" -f $releaseVersion)
-$extensionStage = Join-Path $stagingRoot 'browser-extension'
 $appPublish = Join-Path $stagingRoot 'app-publish'
-$hostPublish = Join-Path $stagingRoot 'host-publish'
 $portableZip = Join-Path $releaseRoot ("WorkParcel-Portable-{0}-win-x64.zip" -f $releaseVersion)
-$extensionZip = Join-Path $releaseRoot ("WorkParcel-Browser-Extension-{0}.zip" -f $releaseVersion)
 $installerArtifact = Join-Path $releaseRoot ("WorkParcel-Setup-{0}.exe" -f $releaseVersion)
 $checksumPath = Join-Path $releaseRoot 'SHA256SUMS.txt'
 $releaseNotesArtifact = Join-Path $releaseRoot ("RELEASE_NOTES-{0}.md" -f $releaseVersion)
-$browserGuideArtifact = Join-Path $releaseRoot 'BROWSER-EXTENSION-SETUP.md'
 $troubleshootingArtifact = Join-Path $releaseRoot 'INSTALLATION-TROUBLESHOOTING.md'
 
-New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
-if (Test-Path -LiteralPath $stagingRoot) { Remove-Item -LiteralPath $stagingRoot -Recurse -Force }
-New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
+# Beta 3 is intentionally built into a fresh, exact output directory. This
+# prevents stale earlier staging files from entering the release package.
+if (Test-Path -LiteralPath $releaseRoot) { Remove-Item -LiteralPath $releaseRoot -Recurse -Force }
+New-Item -ItemType Directory -Path $stagingRoot | Out-Null
 
 $dotnet = (Get-Command dotnet.exe -ErrorAction Stop).Source
 Invoke-RequiredCommand $dotnet @('restore', $solutionPath, '-r', 'win-x64')
 Invoke-RequiredCommand $dotnet @('build', $solutionPath, '-c', 'Release', '--no-restore')
 Invoke-RequiredCommand $dotnet @('test', $solutionPath, '-c', 'Release', '--no-restore')
 
-New-Item -ItemType Directory -Path $appPublish, $hostPublish -Force | Out-Null
+New-Item -ItemType Directory -Path $appPublish | Out-Null
 $publishCommon = @('-c', 'Release', '-r', 'win-x64', '--self-contained', 'true', '--no-restore', '-p:Platform=x64', '-p:WindowsPackageType=None', '-p:EnableMsixTooling=false', '-p:EnableWinAppRunSupport=false', '-p:WindowsAppSDKSelfContained=true', '-p:PublishSingleFile=false', '-p:PublishReadyToRun=false', '-p:PublishTrimmed=false', '-p:DebugType=None', '-p:DebugSymbols=false')
 Invoke-RequiredCommand $dotnet (@('publish', $appProjectPath) + $publishCommon + @('-p:PublishDir=' + $appPublish + '\'))
-Invoke-RequiredCommand $dotnet (@('publish', $hostProjectPath) + $publishCommon + @('-p:PublishDir=' + $hostPublish + '\'))
-
 Assert-File (Join-Path $appPublish 'WorkParcel.exe')
 Assert-File (Join-Path $appPublish 'Assets\AppIcon.ico')
-Assert-File (Join-Path $hostPublish 'WorkParcel.BrowserHost.exe')
 
-# The installer stage mirrors the installed package contents. It contains binaries and
-# user-facing support files only; no source, database, logs, or build cache.
-New-Item -ItemType Directory -Path $installerStage, (Join-Path $installerStage 'App'), (Join-Path $installerStage 'BrowserHost'), (Join-Path $installerStage 'Documentation') -Force | Out-Null
+# The installer stage contains the published app and user-facing support docs.
+New-Item -ItemType Directory -Path $installerStage, (Join-Path $installerStage 'App'), (Join-Path $installerStage 'Documentation') | Out-Null
 Copy-DirectoryContents $appPublish (Join-Path $installerStage 'App')
-Copy-DirectoryContents $hostPublish (Join-Path $installerStage 'BrowserHost')
-Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\Setup-BrowserHost.ps1') -Destination (Join-Path $installerStage 'BrowserHost\Setup-BrowserHost.ps1') -Force
-
-New-Item -ItemType Directory -Path $extensionStage -Force | Out-Null
-foreach ($fileName in @('manifest.json', 'background.js', 'popup.html', 'popup.js', 'popup.css')) {
-    Copy-Item -LiteralPath (Join-Path $extensionSource $fileName) -Destination $extensionStage -Force
-}
-Copy-DirectoryContents (Join-Path $extensionSource 'icons') (Join-Path $extensionStage 'icons')
-foreach ($fileName in @('manifest.json', 'background.js', 'popup.html', 'popup.js', 'popup.css', 'icons\icon16.png', 'icons\icon32.png', 'icons\icon128.png')) {
-    Assert-File (Join-Path $extensionStage $fileName)
-}
-Copy-DirectoryContents $extensionStage (Join-Path $installerStage 'browser-extension')
-foreach ($doc in @(@{Source=$browserGuideSource; Name='Browser-Extension-Setup.md'}, @{Source=$troubleshootingSource; Name='Installation-Troubleshooting.md'})) {
-    Copy-Item -LiteralPath $doc.Source -Destination (Join-Path $installerStage ("Documentation\{0}" -f $doc.Name)) -Force
-}
-Assert-File (Join-Path $installerStage 'BrowserHost\Setup-BrowserHost.ps1')
-Assert-File (Join-Path $installerStage 'Documentation\Browser-Extension-Setup.md')
-Assert-File (Join-Path $installerStage 'Documentation\Installation-Troubleshooting.md')
-foreach ($fileName in @('manifest.json', 'background.js', 'popup.html', 'popup.js', 'popup.css', 'icons\icon16.png', 'icons\icon32.png', 'icons\icon128.png')) {
-    Assert-File (Join-Path $installerStage ("browser-extension\{0}" -f $fileName))
-}
+Copy-Item -LiteralPath $troubleshootingSource -Destination (Join-Path $installerStage 'Documentation\INSTALLATION-TROUBLESHOOTING.md') -Force
 
 # Portable package: WorkParcel.exe is at the extraction root and supporting
-# files remain alongside it. User data still goes to Local AppData.
-New-Item -ItemType Directory -Path $portableStage, (Join-Path $portableStage 'BrowserHost'), (Join-Path $portableStage 'browser-extension'), (Join-Path $portableStage 'Documentation') -Force | Out-Null
+# files remain beside it. User data still goes to Local AppData.
+New-Item -ItemType Directory -Path $portableStage, (Join-Path $portableStage 'Documentation') | Out-Null
 Copy-DirectoryContents $appPublish $portableStage
-Copy-DirectoryContents $hostPublish (Join-Path $portableStage 'BrowserHost')
-Copy-Item -LiteralPath (Join-Path $repoRoot 'tools\Setup-BrowserHost.ps1') -Destination (Join-Path $portableStage 'BrowserHost\Setup-BrowserHost.ps1') -Force
-Copy-DirectoryContents $extensionStage (Join-Path $portableStage 'browser-extension')
 Copy-Item -LiteralPath $portableReadmeSource -Destination (Join-Path $portableStage 'README.md') -Force
-Copy-Item -LiteralPath $browserGuideSource -Destination (Join-Path $portableStage 'Documentation\Browser-Extension-Setup.md') -Force
-Copy-Item -LiteralPath $troubleshootingSource -Destination (Join-Path $portableStage 'Documentation\Installation-Troubleshooting.md') -Force
+Copy-Item -LiteralPath $troubleshootingSource -Destination (Join-Path $portableStage 'Documentation\INSTALLATION-TROUBLESHOOTING.md') -Force
 
 foreach ($pdb in (Get-ChildItem -LiteralPath $stagingRoot -Recurse -File -Filter '*.pdb' -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $pdb.FullName -Force }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-if (Test-Path -LiteralPath $portableZip) { Remove-Item -LiteralPath $portableZip -Force }
-if (Test-Path -LiteralPath $extensionZip) { Remove-Item -LiteralPath $extensionZip -Force }
 Compress-Archive -LiteralPath $portableStage -DestinationPath $portableZip -CompressionLevel Optimal
-Compress-Archive -LiteralPath $extensionStage -DestinationPath $extensionZip -CompressionLevel Optimal
-
 Copy-Item -LiteralPath $releaseNotesSource -Destination $releaseNotesArtifact -Force
-Copy-Item -LiteralPath $browserGuideSource -Destination $browserGuideArtifact -Force
 Copy-Item -LiteralPath $troubleshootingSource -Destination $troubleshootingArtifact -Force
 
 $inno = if ($SkipInstaller) { $null } else { Get-InnoSetupCompiler }
+if ($null -eq $inno -and -not $SkipInstaller) { throw 'Inno Setup compiler was not found. Install Inno Setup or rerun with -SkipInstaller for a portable-only development check.' }
 if ($null -ne $inno) {
     $issPath = Join-Path $repoRoot 'installer\WorkParcel.iss'
     Invoke-RequiredCommand $inno @($issPath, "/DAppVersion=$version", "/DReleaseLabel=$releaseVersion", "/DStageDir=$installerStage", "/DReleaseDir=$releaseRoot")
     Assert-File $installerArtifact
-} else {
-    Write-Warning ("Inno Setup compiler was not found. Portable and browser-extension artifacts were created; install Inno Setup and rerun this script to create {0}." -f $installerArtifact)
 }
 
-foreach ($archivePath in @($portableZip, $extensionZip)) {
-    Assert-File $archivePath
-    $archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
-    try {
-        if ($archive.Entries.Count -eq 0) { throw "Archive is empty: $archivePath" }
-        foreach ($entry in $archive.Entries) {
-            if ($entry.FullName -match '(^|/)(\.git|obj|bin|TestResults|\.vscode)(/|$)|(^|/)\.env($|\.)|\.db($|[-.])|\.log$|\.pdb$') { throw "Forbidden release entry '$($entry.FullName)' found in $archivePath" }
-        }
-    } finally { $archive.Dispose() }
-}
+Assert-CleanPath $stagingRoot
+Assert-CleanArchive $portableZip
 
-$requiredArtifacts = @($portableZip, $extensionZip, $releaseNotesArtifact, $browserGuideArtifact, $troubleshootingArtifact)
+$requiredArtifacts = @($portableZip, $releaseNotesArtifact, $troubleshootingArtifact)
 if ($null -ne $inno) { $requiredArtifacts += $installerArtifact }
 foreach ($artifact in $requiredArtifacts) { Assert-File $artifact }
+
+$allowedTopLevel = @((Split-Path -Leaf $portableZip), (Split-Path -Leaf $releaseNotesArtifact), (Split-Path -Leaf $troubleshootingArtifact), 'SHA256SUMS.txt', 'staging')
+if ($null -ne $inno) { $allowedTopLevel += Split-Path -Leaf $installerArtifact }
+foreach ($entry in (Get-ChildItem -LiteralPath $releaseRoot -Force)) {
+    if ($allowedTopLevel -notcontains $entry.Name) { throw "Unexpected beta 3 release output: $($entry.Name)" }
+}
 
 $hashLines = foreach ($artifact in ($requiredArtifacts | Sort-Object)) {
     $hash = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -184,15 +165,7 @@ foreach ($line in $hashLines) {
     if ((Get-FileHash -LiteralPath $checkPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $parts[0]) { throw "Checksum verification failed: $checkPath" }
 }
 
-$forbiddenNames = @('.git', '.env', 'obj', 'TestResults', 'browser-profile', 'cookies', 'workparcel.db', 'host.log', 'workparcel.log')
-foreach ($entry in (Get-ChildItem -LiteralPath $stagingRoot -Recurse -Force)) {
-    foreach ($forbidden in $forbiddenNames) {
-        if ($entry.Name -ieq $forbidden -or $entry.FullName -match "[\\/]$([regex]::Escape($forbidden))([\\/]|$)") { throw "Forbidden release staging entry found: $($entry.FullName)" }
-    }
-}
-
 Write-Host ''
-Write-Host 'WorkParcel release artifacts:'
+Write-Host 'WorkParcel 0.2.0 Beta 3 release artifacts:'
 foreach ($artifact in ($requiredArtifacts | Sort-Object)) { Write-Host (" - {0}" -f $artifact) }
 Write-Host (" - {0}" -f $checksumPath)
-if ($null -eq $inno) { Write-Host 'Installer: not compiled (Inno Setup unavailable).' } else { Write-Host ("Installer compiler: {0}" -f $inno) }

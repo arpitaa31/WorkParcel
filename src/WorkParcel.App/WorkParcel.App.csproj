@@ -22,10 +22,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="..\WorkParcel.Core\BrowserProtocol.cs" Link="BrowserProtocol.cs" />
-    <Compile Include="..\WorkParcel.Core\BrowserTabRules.cs" Link="BrowserTabRules.cs" />
-    <Compile Include="..\WorkParcel.Core\BrowserRestorePlanner.cs" Link="BrowserRestorePlanner.cs" />
-    <Compile Include="..\WorkParcel.Core\BrowserClosePlanner.cs" Link="BrowserClosePlanner.cs" />
     <Content Include="Assets\SplashScreen.scale-200.png" />
     <Content Include="Assets\LockScreenLogo.scale-200.png" />
     <Content Include="Assets\Square150x150Logo.scale-200.png" />

@@ -222,7 +222,7 @@ public sealed partial class ParcelsPage : PageBase
         var list = ParcelQueries.Apply(Store.Parcels, new ParcelQueryOptions(_search.Text, status, sort));
         if (list.Count == 0)
         {
-            var empty = Ui.Stack(9); empty.Children.Add(Ui.Mono(string.IsNullOrWhiteSpace(_search.Text) && _filterText == "All" ? "NO PARCELS YET" : "NO MATCHES", 12, "#9BE28F", true)); empty.Children.Add(Ui.Text(string.IsNullOrWhiteSpace(_search.Text) && _filterText == "All" ? "Capture open windows or create a blank parcel to begin." : "Try a different search or clear the filters.", 13, false, "#8D9CA2"));
+            var empty = Ui.Stack(9); empty.Children.Add(Ui.Mono(string.IsNullOrWhiteSpace(_search.Text) && _filterText == "All" ? "NO PARCELS YET" : "NO MATCHES", 12, "#9BE28F", true)); empty.Children.Add(Ui.Text(string.IsNullOrWhiteSpace(_search.Text) && _filterText == "All" ? "Capture open apps or create a blank parcel to begin." : "Try a different search or clear the filters.", 13, false, "#8D9CA2"));
             var clear = Ui.Button("CLEAR FILTERS"); clear.Click += (_, _) => { _search.Text = string.Empty; _filter.SelectedIndex = 0; _sort.SelectedIndex = 0; }; empty.Children.Add(clear); _rows.Children.Add(Ui.Card(empty, 22)); return;
         }
         foreach (var parcel in list) _rows.Children.Add(Row(parcel));

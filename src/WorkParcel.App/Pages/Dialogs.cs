@@ -20,7 +20,7 @@ internal static class Dialogs
         var stack = (StackPanel)content.Child;
         stack.Children.Add(Ui.Mono("CREATE NEW PARCEL", 11, "#9BE28F", true));
         stack.Children.Add(Ui.Text("Save a setup you want to return to later.", 14, true));
-        stack.Children.Add(Ui.Text("Create a blank parcel now, or continue to select open windows, files, folders, links and notes.", 11, false, "#8D9CA2"));
+        stack.Children.Add(Ui.Text("Create a blank parcel now, or continue to select open apps, files, folders and web links.", 11, false, "#8D9CA2"));
         stack.Children.Add(name);
         stack.Children.Add(description);
         stack.Children.Add(saveState);
@@ -134,26 +134,6 @@ internal static class Dialogs
     }
 
     public static async Task ShowMessage(Page page, string title, string message) => await Ui.ShowDialog(new ContentDialog { Title = title, Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap }, CloseButtonText = "OK", XamlRoot = page.XamlRoot });
-
-    public static async Task ShowBrowserTabsHowItWorksAsync(Page page)
-    {
-        var content = Ui.Stack(10);
-        content.Children.Add(Ui.Text("The WorkParcel browser extension lets the desktop app see the tabs you choose to include in a parcel. When you pack the parcel away, WorkParcel can close those selected tabs. Opening the parcel restores their saved links.", 13));
-        content.Children.Add(Ui.Text(@"WorkParcel saves the tab title and URL.
-It does not save passwords.
-It does not save cookies.
-It does not read page contents.
-It does not capture keystrokes.
-Private browsing tabs are excluded.
-The browser extension is required only for browser-tab features.", 12, false, "#8D9CA2"));
-        await Ui.ShowDialog(new ContentDialog
-        {
-            Title = "HOW BROWSER TABS WORK",
-            Content = content,
-            CloseButtonText = "GOT IT",
-            XamlRoot = page.XamlRoot
-        });
-    }
 
     public static async Task<bool> ConfirmPermanentDelete(Page page, Parcel parcel)
     {

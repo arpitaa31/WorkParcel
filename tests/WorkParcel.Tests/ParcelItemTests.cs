@@ -2,7 +2,6 @@ using Microsoft.Data.Sqlite;
 using System.Security.Cryptography;
 using WorkParcel_App.Models;
 using WorkParcel_App.Services;
-using WorkParcel.Core.Browser;
 using Xunit;
 
 namespace WorkParcel.Tests;
@@ -36,7 +35,7 @@ INSERT INTO ParcelItems VALUES('22222222-2222-2222-2222-222222222222','11111111-
     }
 
     [Fact]
-    public async Task LatestPartThreeSchemaMigratesBrowserColumnsWithoutRecreatingParcelData()
+    public async Task LatestPartThreeSchemaMigratesOldBrowserRowsToWebLinksWithoutRecreatingParcelData()
     {
         using var temp = new TestFolder(); var paths = new AppDataPaths(temp.Path); paths.EnsureDirectories();
         await using (var connection = new SqliteConnection($"Data Source={paths.DatabasePath}"))
@@ -56,8 +55,15 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         await using var check = new SqliteConnection($"Data Source={paths.DatabasePath}"); await check.OpenAsync();
         var version = check.CreateCommand(); version.CommandText = "SELECT Value FROM SchemaInfo WHERE Key='SchemaVersion';";
         var parcelName = check.CreateCommand(); parcelName.CommandText = "SELECT Name FROM Parcels WHERE Id='11111111-1111-1111-1111-111111111111';";
-        var browserDomain = check.CreateCommand(); browserDomain.CommandText = "SELECT BrowserDomain FROM ParcelItems WHERE Id='22222222-2222-2222-2222-222222222222';";
-        Assert.Equal(DatabaseInitializer.CurrentSchemaVersion.ToString(), await version.ExecuteScalarAsync()); Assert.Equal("Part 3 parcel", await parcelName.ExecuteScalarAsync()); Assert.Equal("example.com", await browserDomain.ExecuteScalarAsync());
+        var itemType = check.CreateCommand(); itemType.CommandText = "SELECT ItemType FROM ParcelItems WHERE Id='22222222-2222-2222-2222-222222222222';";
+        var itemName = check.CreateCommand(); itemName.CommandText = "SELECT DisplayName FROM ParcelItems WHERE Id='22222222-2222-2222-2222-222222222222';";
+        var itemUrl = check.CreateCommand(); itemUrl.CommandText = "SELECT Value FROM ParcelItems WHERE Id='22222222-2222-2222-2222-222222222222';";
+        var columns = check.CreateCommand(); columns.CommandText = "SELECT name FROM pragma_table_info('ParcelItems') WHERE name LIKE 'Browser%';";
+        Assert.Equal(DatabaseInitializer.CurrentSchemaVersion.ToString(), await version.ExecuteScalarAsync()); Assert.Equal("Part 3 parcel", await parcelName.ExecuteScalarAsync()); Assert.Equal("WebLink", await itemType.ExecuteScalarAsync()); Assert.Equal("Docs", await itemName.ExecuteScalarAsync()); Assert.Equal("https://example.com/docs", await itemUrl.ExecuteScalarAsync()); Assert.Null(await columns.ExecuteScalarAsync());
+        var restarted = await Store(paths.RootDirectory);
+        var loaded = Assert.Single(Assert.Single(restarted.Parcels).Items);
+        Assert.Equal(ParcelItemType.WebLink, loaded.ItemType);
+        Assert.Equal("https://example.com/docs", loaded.Value);
     }
 
     [Fact]
@@ -68,29 +74,10 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         {
             await factory.FileAsync(Guid.Empty, source, 0), factory.Folder(Guid.Empty, folder, 1), factory.Application(Guid.Empty, app, 2),
             factory.WebLink(Guid.Empty, "https://example.com/a?q=1", "Example", null, 3), factory.Note(Guid.Empty, "Remember", "Do the careful thing", 4),
-            new() { ParcelId=Guid.Empty, ItemType=ParcelItemType.ApplicationWindow, DisplayName="Disposable window", Value=app, NormalizedIdentity="window|disposable", ExecutablePath=app, WindowTitle="Disposable window", WindowClassName="TestWindow", ProcessName="tiny", CreatedAt=DateTime.Now, UpdatedAt=DateTime.Now, SortOrder=5, CloseSupported=true },
-            new() { ParcelId=Guid.Empty, ItemType=ParcelItemType.BrowserTab, DisplayName="Docs tab", Value="https://example.com/docs", NormalizedIdentity="chrome|window-0|https://example.com/docs", BrowserFamily="chrome", BrowserDomain="example.com", BrowserWindowGroupId="window-0", BrowserTabIndex=0, BrowserCapturedAt=DateTime.Now, CreatedAt=DateTime.Now, UpdatedAt=DateTime.Now, SortOrder=6 }
+            new() { ParcelId=Guid.Empty, ItemType=ParcelItemType.ApplicationWindow, DisplayName="Disposable window", Value=app, NormalizedIdentity="window|disposable", ExecutablePath=app, WindowTitle="Disposable window", WindowClassName="TestWindow", ProcessName="tiny", CreatedAt=DateTime.Now, UpdatedAt=DateTime.Now, SortOrder=5, CloseSupported=true }
         };
-        var parcel = await store.CreateWithItemsAsync("Real setup", "all types", items); Assert.Equal(7, parcel.ItemCount); Assert.Contains("2 APPS", parcel.ItemSummary);
-        var restarted = await Store(temp.Path); var loaded = Assert.Single(restarted.Parcels); Assert.Equal(7, loaded.ItemCount); Assert.Equal(7, loaded.Items.Select(item => item.ItemType).Distinct().Count()); Assert.Equal("Do the careful thing", loaded.Items.Single(item => item.ItemType == ParcelItemType.Note).NoteContent); Assert.Equal("window-0", loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab).BrowserWindowGroupId); Assert.Equal("example.com", loaded.Items.Single(item => item.ItemType == ParcelItemType.BrowserTab).BrowserDomain); Assert.Equal("TestWindow", loaded.Items.Single(item => item.ItemType == ParcelItemType.ApplicationWindow).WindowClassName);
-    }
-
-    [Fact]
-    public async Task BrowserRuntimeIdsStayConnectionScopedAndDoNotPersist()
-    {
-        using var temp = new TestFolder(); var store = await Store(temp.Path); var now = DateTime.Now;
-        var item = new ParcelItem
-        {
-            ParcelId = Guid.Empty, ItemType = ParcelItemType.BrowserTab, DisplayName = "Runtime tab", Value = "https://example.com/runtime",
-            NormalizedIdentity = "chrome|window-0|https://example.com/runtime", BrowserFamily = "chrome", BrowserWindowGroupId = "window-0",
-            BrowserSessionTabId = "temporary-tab-id", BrowserSessionWindowId = "temporary-window-id", BrowserConnectionId = "temporary-connection-id",
-            CreatedAt = now, UpdatedAt = now, SortOrder = 0
-        };
-        var parcel = await store.CreateWithItemsAsync("Runtime identities", "", new[] { item });
-
-        var restarted = await Store(temp.Path); var saved = Assert.Single(Assert.Single(restarted.Parcels).Items);
-        Assert.Null(saved.BrowserSessionTabId); Assert.Null(saved.BrowserSessionWindowId); Assert.Null(saved.BrowserConnectionId);
-        Assert.Equal("window-0", saved.BrowserWindowGroupId); Assert.Equal("https://example.com/runtime", saved.Value);
+        var parcel = await store.CreateWithItemsAsync("Real setup", "all types", items); Assert.Equal(6, parcel.ItemCount); Assert.Contains("2 APPS", parcel.ItemSummary);
+        var restarted = await Store(temp.Path); var loaded = Assert.Single(restarted.Parcels); Assert.Equal(6, loaded.ItemCount); Assert.Equal(6, loaded.Items.Select(item => item.ItemType).Distinct().Count()); Assert.Equal("Do the careful thing", loaded.Items.Single(item => item.ItemType == ParcelItemType.Note).NoteContent); Assert.Equal("TestWindow", loaded.Items.Single(item => item.ItemType == ParcelItemType.ApplicationWindow).WindowClassName);
     }
 
     [Fact]
@@ -102,7 +89,10 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         await Assert.ThrowsAsync<DuplicateParcelItemException>(() => store.AddItemsAsync(parcel, new[] { duplicateFile }));
         await Assert.ThrowsAsync<DuplicateParcelItemException>(() => store.AddItemsAsync(parcel, new[] { factory.Folder(parcel.Id, folder + "\\", 4) }));
         await Assert.ThrowsAsync<DuplicateParcelItemException>(() => store.AddItemsAsync(parcel, new[] { factory.Application(parcel.Id, app.ToUpperInvariant(), 4) }));
-        await Assert.ThrowsAsync<DuplicateParcelItemException>(() => store.AddItemsAsync(parcel, new[] { factory.WebLink(parcel.Id, "HTTPS://EXAMPLE.COM/path", null, null, 4) }));
+        var storedLink = parcel.Items.Single(item => item.ItemType == ParcelItemType.WebLink);
+        var duplicateLink = factory.WebLink(parcel.Id, "HTTPS://EXAMPLE.COM/path", null, null, 4);
+        Assert.Equal(storedLink.NormalizedIdentity, duplicateLink.NormalizedIdentity);
+        await Assert.ThrowsAsync<DuplicateParcelItemException>(() => store.AddItemsAsync(parcel, new[] { duplicateLink }));
     }
 
     [Fact]
@@ -279,44 +269,6 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         Assert.Empty(Assert.Single(restarted.Parcels).Items);
     }
 
-    [Fact]
-    public async Task RemovingBrowserTabRecordDoesNotContactBrowserAndStaysDeletedAfterRestart()
-    {
-        using var temp = new TestFolder();
-        var url = "https://example.com/workparcel-disposable-tab";
-        var store = await Store(temp.Path);
-        var parcel = await store.CreateEmptyAsync("Browser tab removal");
-        var item = new ParcelItem
-        {
-            ParcelId = parcel.Id,
-            ItemType = ParcelItemType.BrowserTab,
-            DisplayName = "Disposable browser tab",
-            Value = url,
-            NormalizedIdentity = BrowserTabRules.Identity("chrome", "window-0", url),
-            BrowserFamily = "chrome",
-            BrowserDomain = "example.com",
-            BrowserWindowGroupId = "window-0",
-            BrowserTabIndex = 0,
-            BrowserCapturedAt = DateTime.Now,
-            CreatedAt = DateTime.Now,
-            UpdatedAt = DateTime.Now,
-            LaunchEnabled = true
-        };
-        await store.AddItemsAsync(parcel, new[] { item });
-
-        Assert.True(await store.RemoveItemAsync(parcel, new ParcelItem { Id = item.Id, ParcelId = parcel.Id, ItemType = ParcelItemType.BrowserTab }));
-
-        Assert.Equal(0, parcel.ItemCount);
-        await using (var db = new SqliteConnection($"Data Source={temp.Path}\\Data\\workparcel.db"))
-        {
-            await db.OpenAsync();
-            var rowCount = db.CreateCommand(); rowCount.CommandText = "SELECT COUNT(*) FROM ParcelItems WHERE Id=$id OR Value=$url;"; rowCount.Parameters.AddWithValue("$id", item.Id.ToString()); rowCount.Parameters.AddWithValue("$url", url);
-            Assert.Equal(0L, await rowCount.ExecuteScalarAsync());
-        }
-
-        var restarted = await Store(temp.Path);
-        Assert.Empty(Assert.Single(restarted.Parcels).Items);
-    }
 
     [Fact]
     public async Task RepositoryReportsAffectedRowsAndFailedRemovalLeavesStateAndHistoryUnchanged()
@@ -604,44 +556,6 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
     }
 
     [Fact]
-    public void BrowserRulesExcludePrivateAndNonWebTabsAndUseWindowScopedIdentity()
-    {
-        var tab = new BrowserTabData { Browser = "chrome", Url = "https://example.com", Incognito = false };
-        Assert.True(BrowserTabRules.IsAllowedForCapture(tab));
-        Assert.False(BrowserTabRules.IsAllowedForCapture(tab with { Incognito = true }));
-        Assert.False(BrowserTabRules.IsAllowedForCapture(tab with { Url = "chrome://settings" }));
-        Assert.False(BrowserTabRules.IsAllowedForCapture(tab with { Url = "https://user:password@example.com/private" }));
-        Assert.NotEqual(BrowserTabRules.Identity("chrome", "window-0", tab.Url), BrowserTabRules.Identity("chrome", "window-1", tab.Url));
-    }
-
-    [Fact]
-    public void BrowserIdentityPreservesQueryFragmentPathAndProtocolAndNormalizesOnlyHost()
-    {
-        var first = BrowserTabRules.Identity("CHROME", "window-0", "HTTPS://Example.COM/Path%2FCase?q=One#Part");
-        var second = BrowserTabRules.Identity("chrome", "window-0", "https://example.com/Path%2FCase?q=One#Part");
-        Assert.Equal(first, second);
-        Assert.NotEqual(first, BrowserTabRules.Identity("chrome", "window-0", "http://example.com/Path%2FCase?q=One#Part"));
-        Assert.NotEqual(first, BrowserTabRules.Identity("chrome", "window-0", "https://example.com/Path%2FCase?q=Two#Part"));
-        Assert.NotEqual(first, BrowserTabRules.Identity("chrome", "window-0", "https://example.com/Path%2FCase?q=One"));
-        Assert.NotEqual(first, BrowserTabRules.Identity("chrome", "window-0", "https://example.com/path%2FCase?q=One#Part"));
-        Assert.NotEqual(first, BrowserTabRules.Identity("chrome", "window-0", "https://example.com/Path%2FCase?b=Two&a=One#Part"));
-        var saved = new ParcelItem { ItemType = ParcelItemType.BrowserTab, NormalizedIdentity = first };
-        var caseChanged = new ParcelItem { ItemType = ParcelItemType.BrowserTab, NormalizedIdentity = BrowserTabRules.Identity("chrome", "window-0", "https://example.com/path%2FCase?q=One#Part") };
-        Assert.False(ParcelItemIdentity.IsDuplicate(new[] { saved }, caseChanged));
-        Assert.True(ParcelItemIdentity.IsDuplicate(new[] { saved }, new ParcelItem { ItemType = ParcelItemType.BrowserTab, NormalizedIdentity = first }));
-    }
-
-    [Fact]
-    public void BrowserFaviconPolicyRejectsLocalAndOversizedReferences()
-    {
-        Assert.Equal("https://example.com/icon.png", BrowserTabRules.SafeFaviconUrl("https://example.com/icon.png"));
-        Assert.Null(BrowserTabRules.SafeFaviconUrl("file:///C:/secret/icon.png"));
-        Assert.Null(BrowserTabRules.SafeFaviconUrl("data:image/png;base64,AAAA"));
-        Assert.Null(BrowserTabRules.SafeFaviconUrl("https://user:password@example.com/icon.png"));
-        Assert.Null(BrowserTabRules.SafeFaviconUrl("https://example.com/" + new string('x', 2048)));
-    }
-
-    [Fact]
     public void IconCachePathStaysInsideTheWorkParcelRoot()
     {
         using var temp = new TestFolder();
@@ -651,106 +565,6 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         Assert.Equal(Path.Combine(temp.Path, "Cache", "Icons"), paths.IconCacheDirectory);
         Assert.StartsWith(Path.GetFullPath(temp.Path) + Path.DirectorySeparatorChar, Path.GetFullPath(paths.IconCacheDirectory), StringComparison.OrdinalIgnoreCase);
         Assert.True(Directory.Exists(paths.IconCacheDirectory));
-    }
-
-    [Fact]
-    public void BrowserGroupIdentityDoesNotPersistTemporarySessionGroupIds()
-    {
-        var first = BrowserTabRules.StableGroupIdentity("chrome", "window-0", "Research", "blue");
-        var second = BrowserTabRules.StableGroupIdentity("chrome", "window-0", "Research", "blue");
-        Assert.NotNull(first); Assert.Equal(first, second); Assert.NotEqual(first, BrowserTabRules.StableGroupIdentity("chrome", "window-1", "Research", "blue")); Assert.Null(BrowserTabRules.StableGroupIdentity("chrome", "window-0", null, null));
-    }
-
-    [Fact]
-    public async Task BrowserLastOpenedTimestampPersistsWithoutAddingPerTabHistory()
-    {
-        using var temp = new TestFolder(); var store = await Store(temp.Path);
-        var item = new ParcelItem { ItemType = ParcelItemType.BrowserTab, DisplayName = "Docs", Value = "https://example.com/docs", NormalizedIdentity = BrowserTabRules.Identity("chrome", "window-0", "https://example.com/docs"), BrowserFamily = "chrome", BrowserWindowGroupId = "window-0", LaunchEnabled = true };
-        var parcel = await store.CreateWithItemsAsync("Browser", "", new[] { item });
-        await store.MarkBrowserItemsOpenedAsync(parcel, parcel.Items);
-        Assert.NotNull(item.BrowserLastOpenedAt);
-        var restarted = await Store(temp.Path); var saved = Assert.Single(Assert.Single(restarted.Parcels).Items);
-        Assert.NotNull(saved.BrowserLastOpenedAt);
-        Assert.Single(restarted.History, entry => entry.EventType == ParcelHistoryEventType.ItemsCaptured);
-    }
-
-    [Fact]
-    public void BrowserRestorePlannerPreservesOrderAndSkipsOnlySameWindowDuplicates()
-    {
-        var saved = new[]
-        {
-            new BrowserRestoreItem("b", "chrome", "window-0", "https://example.com/b", 2, false, false, null, null),
-            new BrowserRestoreItem("a", "chrome", "window-0", "https://example.com/a", 1, true, true, "Research", "blue"),
-            new BrowserRestoreItem("other", "chrome", "window-1", "https://example.com/a", 1, false, false, null, null),
-            new BrowserRestoreItem("internal", "chrome", "window-0", "chrome://settings", 3, false, false, null, null)
-        };
-        var plan = BrowserRestorePlanner.Build(saved, new[] { new BrowserOpenIdentity("chrome", "window-0", "https://example.com/a") });
-        Assert.Equal(new[] { "AlreadyOpen", "Open", "Unsupported", "Open" }, plan.Items.Select(item => item.Status));
-        Assert.Equal(new[] { "a", "b", "internal", "other" }, plan.Items.Select(item => item.Item.ItemKey));
-        Assert.Equal(2, plan.OpenableCount);
-    }
-
-    [Fact]
-    public void BrowserRestorePlannerAllowsExplicitDuplicateCopies()
-    {
-        var item = new BrowserRestoreItem("copy", "edge", "window-0", "https://example.com", 0, false, false, null, null);
-        var plan = BrowserRestorePlanner.Build(new[] { item }, new[] { new BrowserOpenIdentity("edge", "window-0", item.Url) }, allowDuplicates: true);
-        Assert.Equal("Open", Assert.Single(plan.Items).Status);
-    }
-
-    [Fact]
-    public void BrowserClosePlannerRejectsStaleCrossBrowserConnectionAndUrl()
-    {
-        var candidate = new BrowserCloseCandidate("item", "chrome", "connection-1", "https://example.com/a", "42", "window-1", "https://example.com/a", "window-1", false);
-        Assert.True(BrowserClosePlanner.Evaluate(candidate, "chrome", "connection-1").MayClose);
-        Assert.False(BrowserClosePlanner.Evaluate(candidate, "edge", "connection-1").MayClose);
-        Assert.False(BrowserClosePlanner.Evaluate(candidate, "chrome", "connection-2").MayClose);
-        Assert.False(BrowserClosePlanner.Evaluate(candidate with { CurrentUrl = "https://example.com/changed" }, "chrome", "connection-1").MayClose);
-        Assert.Equal("Excluded", BrowserClosePlanner.Evaluate(candidate with { Incognito = true }, "chrome", "connection-1").Status);
-    }
-
-    [Fact]
-    public void BrowserProtocolRejectsUnknownVersionAndOversizedMessages()
-    {
-        var message = BrowserProtocol.Create("ping", "test", "chrome", new { ok = true }); var bytes = BrowserProtocol.Serialize(message); Assert.True(BrowserProtocol.TryDeserialize(bytes, out var roundTrip, out _)); Assert.Equal("ping", roundTrip!.Type);
-        var invalid = bytes.ToArray(); var json = System.Text.Encoding.UTF8.GetString(invalid).Replace("\"version\":1", "\"version\":99", StringComparison.Ordinal); Assert.False(BrowserProtocol.TryDeserialize(System.Text.Encoding.UTF8.GetBytes(json), out _, out var error)); Assert.Contains("version", error, StringComparison.OrdinalIgnoreCase);
-        Assert.True(BrowserProtocol.TryDeserializeForRelay(System.Text.Encoding.UTF8.GetBytes(json), out var relayMessage, out _)); Assert.Equal(99, relayMessage!.Version);
-        Assert.Throws<InvalidDataException>(() => BrowserProtocol.Serialize(message with { Payload = System.Text.Json.JsonDocument.Parse($"{{\"x\":\"{new string('x', BrowserProtocol.MaxMessageBytes)}\"}}").RootElement }));
-    }
-
-    [Fact]
-    public void BrowserProtocolRejectsUnknownTypeAndInvalidBrowserIdentity()
-    {
-        var unknown = BrowserProtocol.Serialize(BrowserProtocol.Create("ping", "unknown", "chrome", new { }));
-        var unknownJson = System.Text.Encoding.UTF8.GetString(unknown).Replace("\"ping\"", "\"execute\"", StringComparison.Ordinal);
-        Assert.False(BrowserProtocol.TryDeserialize(System.Text.Encoding.UTF8.GetBytes(unknownJson), out _, out var unknownError)); Assert.Contains("unknown", unknownError, StringComparison.OrdinalIgnoreCase);
-        var invalidBrowser = BrowserProtocol.Serialize(BrowserProtocol.Create("ping", "browser", "chrome", new { }));
-        var invalidBrowserJson = System.Text.Encoding.UTF8.GetString(invalidBrowser).Replace("\"chrome\"", "\"firefox\"", StringComparison.Ordinal);
-        Assert.False(BrowserProtocol.TryDeserialize(System.Text.Encoding.UTF8.GetBytes(invalidBrowserJson), out _, out var browserError)); Assert.Contains("browser", browserError, StringComparison.OrdinalIgnoreCase);
-        var invalidConnection = BrowserProtocol.Serialize(BrowserProtocol.Create("ping", "connection", "chrome", new { }, new string('x', 121)));
-        Assert.False(BrowserProtocol.TryDeserialize(invalidConnection, out _, out var connectionError)); Assert.Contains("connection", connectionError, StringComparison.OrdinalIgnoreCase);
-
-        var missingFields = System.Text.Encoding.UTF8.GetBytes($"{{\"version\":1,\"requestId\":\"missing\",\"type\":\"ping\",\"browser\":\"chrome\",\"timestampUtc\":\"{DateTimeOffset.UtcNow:O}\"}}");
-        Assert.False(BrowserProtocol.TryDeserialize(missingFields, out _, out var missingFieldsError)); Assert.Contains("payload", missingFieldsError, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task BrowserProtocolRejectsMalformedJsonAndIncompleteFrames()
-    {
-        Assert.False(BrowserProtocol.TryDeserialize(System.Text.Encoding.UTF8.GetBytes("{"), out _, out var malformedError));
-        Assert.Contains("JSON", malformedError, StringComparison.OrdinalIgnoreCase);
-
-        await using var incomplete = new MemoryStream(new byte[] { 5, 0, 0, 0, (byte)'{', (byte)'}' });
-        await Assert.ThrowsAsync<EndOfStreamException>(() => BrowserProtocol.ReadFrameAsync(incomplete));
-
-        await using var zeroLength = new MemoryStream(new byte[] { 0, 0, 0, 0 });
-        await Assert.ThrowsAsync<InvalidDataException>(() => BrowserProtocol.ReadFrameAsync(zeroLength));
-    }
-
-    [Fact]
-    public async Task BrowserProtocolFramingHandlesPartialReads()
-    {
-        var payload = BrowserProtocol.Serialize(BrowserProtocol.Create("ping", "partial", "edge", new { value = 1 })); await using var stream = new MemoryStream(); await BrowserProtocol.WriteFrameAsync(stream, payload); stream.Position = 0; var framed = await BrowserProtocol.ReadFrameAsync(new ChunkedReadStream(stream, 2)); Assert.Equal(payload, framed);
     }
 
     [Fact]
@@ -811,12 +625,6 @@ INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentit
         public string File(string name, string content) { var path = System.IO.Path.Combine(Path, name); System.IO.File.WriteAllText(path, content); return path; }
         public string Folder(string name) { var path = System.IO.Path.Combine(Path, name); Directory.CreateDirectory(path); return path; }
         public void Dispose() { try { Directory.Delete(Path, true); } catch { } }
-    }
-
-    private sealed class ChunkedReadStream(Stream inner, int chunk) : Stream
-    {
-        public override bool CanRead => true; public override bool CanSeek => inner.CanSeek; public override bool CanWrite => false; public override long Length => inner.Length; public override long Position { get => inner.Position; set => inner.Position = value; }
-        public override int Read(byte[] buffer, int offset, int count) => inner.Read(buffer, offset, Math.Min(chunk, count)); public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default) => inner.ReadAsync(buffer[..Math.Min(chunk, buffer.Length)], cancellationToken); public override void Flush() { } public override Task FlushAsync(CancellationToken cancellationToken) => Task.CompletedTask; public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin); public override void SetLength(long value) => throw new NotSupportedException(); public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class FakeCloseTransport(nint safeHandle) : IWindowCloseTransport

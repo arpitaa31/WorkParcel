@@ -186,18 +186,6 @@ public sealed class WorkspaceStore : BindableBase
         parcel.NotifyItemsChanged();
     }
 
-    public async Task MarkBrowserItemsOpenedAsync(Parcel parcel, IEnumerable<ParcelItem> items, CancellationToken cancellationToken = default)
-    {
-        var selectedIds = items.Where(item => item.ItemType == ParcelItemType.BrowserTab).Select(item => item.Id).ToHashSet();
-        var selected = parcel.Items.Where(item => selectedIds.Contains(item.Id)).ToList();
-        if (selected.Count == 0) return;
-        var openedAt = DateTime.Now;
-        var previous = selected.Select(item => (Item: item, Value: item.BrowserLastOpenedAt)).ToList();
-        foreach (var item in selected) item.BrowserLastOpenedAt = openedAt;
-        try { await _repository.UpdateBrowserLastOpenedAsync(selected, openedAt, cancellationToken); }
-        catch { foreach (var entry in previous) entry.Item.BrowserLastOpenedAt = entry.Value; throw; }
-    }
-
     public async Task UpdateParcelAsync(Parcel parcel, string originalName, string originalDescription, CancellationToken cancellationToken = default)
     {
         var cleanName = ValidateName(parcel.Name);
@@ -363,11 +351,7 @@ public sealed class WorkspaceStore : BindableBase
         HasChanged = source.HasChanged, ExecutablePath = source.ExecutablePath, LaunchArguments = source.LaunchArguments, WorkingDirectory = source.WorkingDirectory,
         WindowTitle = source.WindowTitle, WindowClassName = source.WindowClassName, ProcessName = source.ProcessName, ApplicationUserModelId = source.ApplicationUserModelId,
         FileSize = source.FileSize, FileModifiedAt = source.FileModifiedAt, Fingerprint = source.Fingerprint, IconCacheKey = source.IconCacheKey, NoteContent = source.NoteContent,
-        LaunchEnabled = source.LaunchEnabled, CloseSupported = source.CloseSupported, BrowserFamily = source.BrowserFamily, BrowserDomain = source.BrowserDomain,
-        BrowserWindowGroupId = source.BrowserWindowGroupId, BrowserTabIndex = source.BrowserTabIndex, BrowserPinned = source.BrowserPinned, BrowserActive = source.BrowserActive,
-        BrowserTabGroupId = source.BrowserTabGroupId, BrowserTabGroupTitle = source.BrowserTabGroupTitle, BrowserTabGroupColor = source.BrowserTabGroupColor,
-        BrowserFaviconUrl = source.BrowserFaviconUrl, BrowserCapturedAt = source.BrowserCapturedAt, BrowserLastOpenedAt = source.BrowserLastOpenedAt,
-        BrowserSessionTabId = source.BrowserSessionTabId, BrowserSessionWindowId = source.BrowserSessionWindowId, BrowserConnectionId = source.BrowserConnectionId,
+        LaunchEnabled = source.LaunchEnabled, CloseSupported = source.CloseSupported,
         RuntimeWindowHandle = source.RuntimeWindowHandle, RuntimeProcessId = source.RuntimeProcessId
     };
     private static string ValidateName(string name) { var clean = name?.Trim() ?? string.Empty; if (clean.Length == 0) throw new ArgumentException("A parcel name is required.", nameof(name)); if (clean.Length > 80) throw new ArgumentException("Parcel names must be 80 characters or fewer.", nameof(name)); return clean; }

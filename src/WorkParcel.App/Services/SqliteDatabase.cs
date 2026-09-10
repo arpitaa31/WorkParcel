@@ -43,7 +43,7 @@ public sealed class SqliteConnectionFactory
 
 public sealed class DatabaseInitializer
 {
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 11;
     private readonly SqliteConnectionFactory _factory;
     private readonly AppLogger _logger;
 
@@ -127,6 +127,26 @@ public sealed class DatabaseInitializer
                 await SetVersionAsync(connection, transaction, 9, cancellationToken);
                 version = 9;
             }
+
+            if (version < 10)
+            {
+                await MigrateToV10Async(connection, transaction, cancellationToken);
+                await SetVersionAsync(connection, transaction, 10, cancellationToken);
+                version = 10;
+            }
+
+            if (version < 11)
+            {
+                await MigrateToV11Async(connection, transaction, cancellationToken);
+                await SetVersionAsync(connection, transaction, 11, cancellationToken);
+                version = 11;
+            }
+
+            // Some beta databases were stamped at the current version before
+            // their browser-tab rows were converted. Normalize those rows on
+            // every startup so no live browser metadata is required to load
+            // an otherwise healthy parcel database.
+            await NormalizeLegacyWebLinksAsync(connection, transaction, cancellationToken);
 
             await transaction.CommitAsync(cancellationToken);
             LastSuccessfulInitializationUtc = DateTime.UtcNow;
@@ -312,17 +332,6 @@ CREATE TABLE ParcelItems (
     NoteContent TEXT NULL,
     LaunchEnabled INTEGER NOT NULL DEFAULT 1 CHECK(LaunchEnabled IN (0,1)),
     CloseSupported INTEGER NOT NULL DEFAULT 0 CHECK(CloseSupported IN (0,1)),
-    BrowserFamily TEXT NULL,
-    BrowserWindowGroupId TEXT NULL,
-    BrowserTabIndex INTEGER NULL,
-    BrowserPinned INTEGER NOT NULL DEFAULT 0 CHECK(BrowserPinned IN (0,1)),
-    BrowserActive INTEGER NOT NULL DEFAULT 0 CHECK(BrowserActive IN (0,1)),
-    BrowserTabGroupId TEXT NULL,
-    BrowserTabGroupTitle TEXT NULL,
-    BrowserTabGroupColor TEXT NULL,
-    BrowserFaviconUrl TEXT NULL,
-    BrowserCapturedAt TEXT NULL,
-    BrowserLastOpenedAt TEXT NULL,
     FOREIGN KEY(ParcelId) REFERENCES Parcels(Id) ON DELETE CASCADE
 );
 CREATE INDEX IX_ParcelItems_Parcel_Sort ON ParcelItems(ParcelId, SortOrder, CreatedAt);
@@ -338,9 +347,7 @@ DROP TABLE ParcelItems_V3;";
 
     private static async Task MigrateToV5Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
     {
-        var columns = await ReadColumnsAsync(connection, transaction, "ParcelItems", cancellationToken);
-        if (!columns.Contains("BrowserDomain", StringComparer.OrdinalIgnoreCase)) await ExecuteAsync(connection, transaction, "ALTER TABLE ParcelItems ADD COLUMN BrowserDomain TEXT NULL;", cancellationToken);
-        await ExecuteAsync(connection, transaction, "UPDATE ParcelItems SET BrowserDomain = SecondaryDetail WHERE ItemType = 'BrowserTab' AND BrowserDomain IS NULL;", cancellationToken);
+        await Task.CompletedTask;
     }
 
     private static async Task MigrateToV6Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
@@ -365,6 +372,89 @@ CREATE UNIQUE INDEX IF NOT EXISTS UX_ParcelItems_Identity ON ParcelItems(ParcelI
     private static async Task MigrateToV9Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
     {
         await Task.CompletedTask;
+    }
+
+    private static async Task MigrateToV10Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        // Browser-tab rows are retained as records, but are now ordinary web links.
+        // Clear the obsolete identity before changing the type so an old browser
+        // identity cannot collide with an existing saved link during migration.
+        await ExecuteAsync(connection, transaction, "UPDATE ParcelItems SET ItemType='WebLink', NormalizedIdentity=NULL WHERE ItemType='BrowserTab';", cancellationToken);
+    }
+
+    private static async Task MigrateToV11Async(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        // Keep the database file and all supported parcel data, but remove
+        // obsolete browser-only columns from the active item table. Legacy
+        // rows are normalized after this table-preserving rebuild.
+        await ExecuteAsync(connection, transaction, "DROP INDEX IF EXISTS IX_ParcelItems_Parcel_Sort; DROP INDEX IF EXISTS IX_ParcelItems_Parcel_Type; DROP INDEX IF EXISTS UX_ParcelItems_Identity;", cancellationToken);
+        await ExecuteAsync(connection, transaction, "UPDATE ParcelItems SET ItemType='WebLink', NormalizedIdentity=NULL WHERE ItemType='BrowserTab';", cancellationToken);
+        await ExecuteAsync(connection, transaction, "ALTER TABLE ParcelItems RENAME TO ParcelItems_Legacy;", cancellationToken);
+        const string sql = @"
+CREATE TABLE ParcelItems (
+    Id TEXT PRIMARY KEY,
+    ParcelId TEXT NOT NULL,
+    ItemType TEXT NOT NULL CHECK(ItemType IN ('ApplicationWindow','Application','File','Folder','WebLink','Note')),
+    DisplayName TEXT NOT NULL,
+    Value TEXT NOT NULL DEFAULT '',
+    NormalizedIdentity TEXT NULL,
+    SecondaryDetail TEXT NULL,
+    CreatedAt TEXT NOT NULL,
+    UpdatedAt TEXT NOT NULL,
+    LastVerifiedAt TEXT NULL,
+    SortOrder INTEGER NOT NULL DEFAULT 0,
+    IsMissing INTEGER NOT NULL DEFAULT 0 CHECK(IsMissing IN (0,1)),
+    IsInaccessible INTEGER NOT NULL DEFAULT 0 CHECK(IsInaccessible IN (0,1)),
+    HasChanged INTEGER NOT NULL DEFAULT 0 CHECK(HasChanged IN (0,1)),
+    ExecutablePath TEXT NULL,
+    LaunchArguments TEXT NULL,
+    WorkingDirectory TEXT NULL,
+    WindowTitle TEXT NULL,
+    WindowClassName TEXT NULL,
+    ProcessName TEXT NULL,
+    ApplicationUserModelId TEXT NULL,
+    FileSize INTEGER NULL,
+    FileModifiedAt TEXT NULL,
+    Fingerprint TEXT NULL,
+    IconCacheKey TEXT NULL,
+    NoteContent TEXT NULL,
+    LaunchEnabled INTEGER NOT NULL DEFAULT 1 CHECK(LaunchEnabled IN (0,1)),
+    CloseSupported INTEGER NOT NULL DEFAULT 0 CHECK(CloseSupported IN (0,1)),
+    FOREIGN KEY(ParcelId) REFERENCES Parcels(Id) ON DELETE CASCADE
+);
+INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentity,SecondaryDetail,CreatedAt,UpdatedAt,LastVerifiedAt,SortOrder,IsMissing,IsInaccessible,HasChanged,ExecutablePath,LaunchArguments,WorkingDirectory,WindowTitle,WindowClassName,ProcessName,ApplicationUserModelId,FileSize,FileModifiedAt,Fingerprint,IconCacheKey,NoteContent,LaunchEnabled,CloseSupported)
+SELECT Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentity,SecondaryDetail,CreatedAt,UpdatedAt,LastVerifiedAt,SortOrder,IsMissing,IsInaccessible,HasChanged,ExecutablePath,LaunchArguments,WorkingDirectory,WindowTitle,WindowClassName,ProcessName,ApplicationUserModelId,FileSize,FileModifiedAt,Fingerprint,IconCacheKey,NoteContent,LaunchEnabled,CloseSupported FROM ParcelItems_Legacy;
+DROP TABLE ParcelItems_Legacy;
+CREATE INDEX IX_ParcelItems_Parcel_Sort ON ParcelItems(ParcelId, SortOrder, CreatedAt);
+CREATE INDEX IX_ParcelItems_Parcel_Type ON ParcelItems(ParcelId, ItemType);
+CREATE UNIQUE INDEX UX_ParcelItems_Identity ON ParcelItems(ParcelId, ItemType, NormalizedIdentity) WHERE NormalizedIdentity IS NOT NULL AND ItemType <> 'ApplicationWindow';";
+        await ExecuteAsync(connection, transaction, sql, cancellationToken);
+    }
+
+    private static async Task NormalizeLegacyWebLinksAsync(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
+    {
+        var rows = new List<(string Id, string Value)>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = "SELECT Id, Value FROM ParcelItems WHERE ItemType IN ('BrowserTab','WebLink') ORDER BY CreatedAt, Id;";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken)) rows.Add((reader["Id"].ToString()!, reader["Value"].ToString()!));
+        }
+
+        var identities = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var row in rows)
+        {
+            string? identity = null;
+            if (WebLinkRules.TryNormalize(row.Value, out var uri)) identity = WebLinkRules.Identity(uri);
+            if (identity is not null && !identities.Add(identity))
+            {
+                await ExecuteAsync(connection, transaction, "DELETE FROM ParcelItems WHERE Id=$id;", cancellationToken, ("$id", row.Id));
+                continue;
+            }
+
+            await ExecuteAsync(connection, transaction, "UPDATE ParcelItems SET ItemType='WebLink', NormalizedIdentity=$identity, LaunchEnabled=1, CloseSupported=0, IsInaccessible=0 WHERE Id=$id;", cancellationToken, ("$identity", DbValue.Db(identity)), ("$id", row.Id));
+        }
     }
 
     private static async Task<HashSet<string>> ReadColumnsAsync(SqliteConnection connection, SqliteTransaction transaction, string table, CancellationToken cancellationToken)

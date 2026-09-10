@@ -38,8 +38,8 @@ public static class ExternalLaunchService
     {
         if (string.IsNullOrWhiteSpace(folderPath) || !Directory.Exists(folderPath))
         {
-            var target = string.IsNullOrWhiteSpace(folderPath) ? "the installed browser-extension folder" : folderPath;
-            return ExternalLaunchResult.Failure(target, "The WorkParcel browser extension was not included in this installation.");
+            var target = string.IsNullOrWhiteSpace(folderPath) ? "the selected folder" : folderPath;
+            return ExternalLaunchResult.Failure(target, "The selected folder does not exist or is unavailable.");
         }
 
         var info = new ProcessStartInfo
@@ -51,28 +51,6 @@ public static class ExternalLaunchService
         return TryStart(folderPath, info, start);
     }
 
-    public static ExternalLaunchResult TryOpenBrowserExtensions(
-        string browser,
-        Func<string, string?>? executableFinder = null,
-        Func<ProcessStartInfo, bool>? start = null)
-    {
-        var name = BrowserName(browser);
-        var executable = (executableFinder ?? BrowserInstallationService.FindExecutable)(browser);
-        if (executable is null)
-        {
-            return ExternalLaunchResult.Failure(name, $"{name} is not installed or its executable could not be found.");
-        }
-
-        var uri = browser.Equals("edge", StringComparison.OrdinalIgnoreCase) ? "edge://extensions/" : "chrome://extensions/";
-        var info = new ProcessStartInfo
-        {
-            FileName = executable,
-            UseShellExecute = true
-        };
-        info.ArgumentList.Add("--new-tab");
-        info.ArgumentList.Add(uri);
-        return TryStart(uri, info, start);
-    }
 
     private static ExternalLaunchResult TryStart(string target, ProcessStartInfo info, Func<ProcessStartInfo, bool>? start)
     {
@@ -89,5 +67,4 @@ public static class ExternalLaunchService
         }
     }
 
-    private static string BrowserName(string browser) => browser.Equals("edge", StringComparison.OrdinalIgnoreCase) ? "Edge" : "Chrome";
 }

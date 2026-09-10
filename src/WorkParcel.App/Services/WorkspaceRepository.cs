@@ -34,7 +34,7 @@ public sealed class WorkspaceRepository
 
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText = "SELECT * FROM ParcelItems ORDER BY ParcelId, SortOrder, CreatedAt;";
+            command.CommandText = "SELECT Id, ParcelId, ItemType, DisplayName, Value, NormalizedIdentity, SecondaryDetail, CreatedAt, UpdatedAt, LastVerifiedAt, SortOrder, IsMissing, IsInaccessible, HasChanged, ExecutablePath, LaunchArguments, WorkingDirectory, WindowTitle, WindowClassName, ProcessName, ApplicationUserModelId, FileSize, FileModifiedAt, Fingerprint, IconCacheKey, NoteContent, LaunchEnabled, CloseSupported FROM ParcelItems ORDER BY ParcelId, SortOrder, CreatedAt;";
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
@@ -123,10 +123,7 @@ SecondaryDetail=$detail, UpdatedAt=$updated, LastVerifiedAt=$verified, SortOrder
 IsInaccessible=$inaccessible, HasChanged=$changed, ExecutablePath=$executable, LaunchArguments=$arguments,
 WorkingDirectory=$working, WindowTitle=$windowTitle, WindowClassName=$windowClassName, ProcessName=$process, ApplicationUserModelId=$aumid,
 FileSize=$fileSize, FileModifiedAt=$fileModified, Fingerprint=$fingerprint, IconCacheKey=$icon,
-NoteContent=$note, LaunchEnabled=$launchEnabled, CloseSupported=$closeSupported, BrowserFamily=$browserFamily, BrowserDomain=$browserDomain,
-BrowserWindowGroupId=$browserWindowGroupId, BrowserTabIndex=$browserTabIndex, BrowserPinned=$browserPinned, BrowserActive=$browserActive,
-BrowserTabGroupId=$browserTabGroupId, BrowserTabGroupTitle=$browserTabGroupTitle, BrowserTabGroupColor=$browserTabGroupColor,
-BrowserFaviconUrl=$browserFaviconUrl, BrowserCapturedAt=$browserCapturedAt, BrowserLastOpenedAt=$browserLastOpenedAt WHERE Id=$id;";
+NoteContent=$note, LaunchEnabled=$launchEnabled, CloseSupported=$closeSupported WHERE Id=$id;";
             AddItemParameters(command, item);
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -153,25 +150,6 @@ BrowserFaviconUrl=$browserFaviconUrl, BrowserCapturedAt=$browserCapturedAt, Brow
             command.Parameters.AddWithValue("$inaccessible", item.IsInaccessible ? 1 : 0);
             command.Parameters.AddWithValue("$changed", item.HasChanged ? 1 : 0);
             command.Parameters.AddWithValue("$id", item.Id.ToString());
-            await command.ExecuteNonQueryAsync(cancellationToken);
-        }
-        await transaction.CommitAsync(cancellationToken);
-    }
-
-    public async Task UpdateBrowserLastOpenedAsync(IEnumerable<ParcelItem> items, DateTime openedAt, CancellationToken cancellationToken = default)
-    {
-        var browserItems = items.Where(item => item.ItemType == ParcelItemType.BrowserTab).ToList();
-        if (browserItems.Count == 0) return;
-        await using var connection = await _factory.OpenAsync(cancellationToken);
-        await using var transaction = connection.BeginTransaction();
-        foreach (var item in browserItems)
-        {
-            await using var command = connection.CreateCommand();
-            command.Transaction = transaction;
-            command.CommandText = "UPDATE ParcelItems SET BrowserLastOpenedAt=$opened WHERE Id=$id AND ParcelId=$parcel AND ItemType='BrowserTab';";
-            command.Parameters.AddWithValue("$opened", DbValue.Time(openedAt));
-            command.Parameters.AddWithValue("$id", item.Id.ToString());
-            command.Parameters.AddWithValue("$parcel", item.ParcelId.ToString());
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
@@ -379,8 +357,8 @@ VALUES($id,$name,$description,$state,$created,$updated,$lastOpened,$lastPacked,$
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = @"INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentity,SecondaryDetail,CreatedAt,UpdatedAt,LastVerifiedAt,SortOrder,IsMissing,IsInaccessible,HasChanged,ExecutablePath,LaunchArguments,WorkingDirectory,WindowTitle,WindowClassName,ProcessName,ApplicationUserModelId,FileSize,FileModifiedAt,Fingerprint,IconCacheKey,NoteContent,LaunchEnabled,CloseSupported,BrowserFamily,BrowserDomain,BrowserWindowGroupId,BrowserTabIndex,BrowserPinned,BrowserActive,BrowserTabGroupId,BrowserTabGroupTitle,BrowserTabGroupColor,BrowserFaviconUrl,BrowserCapturedAt,BrowserLastOpenedAt)
-VALUES($id,$parcel,$type,$name,$value,$identity,$detail,$created,$updated,$verified,$sort,$missing,$inaccessible,$changed,$executable,$arguments,$working,$windowTitle,$windowClassName,$process,$aumid,$fileSize,$fileModified,$fingerprint,$icon,$note,$launchEnabled,$closeSupported,$browserFamily,$browserDomain,$browserWindowGroupId,$browserTabIndex,$browserPinned,$browserActive,$browserTabGroupId,$browserTabGroupTitle,$browserTabGroupColor,$browserFaviconUrl,$browserCapturedAt,$browserLastOpenedAt);";
+        command.CommandText = @"INSERT INTO ParcelItems(Id,ParcelId,ItemType,DisplayName,Value,NormalizedIdentity,SecondaryDetail,CreatedAt,UpdatedAt,LastVerifiedAt,SortOrder,IsMissing,IsInaccessible,HasChanged,ExecutablePath,LaunchArguments,WorkingDirectory,WindowTitle,WindowClassName,ProcessName,ApplicationUserModelId,FileSize,FileModifiedAt,Fingerprint,IconCacheKey,NoteContent,LaunchEnabled,CloseSupported)
+VALUES($id,$parcel,$type,$name,$value,$identity,$detail,$created,$updated,$verified,$sort,$missing,$inaccessible,$changed,$executable,$arguments,$working,$windowTitle,$windowClassName,$process,$aumid,$fileSize,$fileModified,$fingerprint,$icon,$note,$launchEnabled,$closeSupported);";
         AddItemParameters(command, item, includeCreated: true);
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
@@ -450,18 +428,6 @@ VALUES($id,$parcel,$type,$name,$value,$identity,$detail,$created,$updated,$verif
         command.Parameters.AddWithValue("$note", DbValue.Db(item.NoteContent));
         command.Parameters.AddWithValue("$launchEnabled", item.LaunchEnabled ? 1 : 0);
         command.Parameters.AddWithValue("$closeSupported", item.CloseSupported ? 1 : 0);
-        command.Parameters.AddWithValue("$browserFamily", DbValue.Db(item.BrowserFamily));
-        command.Parameters.AddWithValue("$browserDomain", DbValue.Db(item.BrowserDomain));
-        command.Parameters.AddWithValue("$browserWindowGroupId", DbValue.Db(item.BrowserWindowGroupId));
-        command.Parameters.AddWithValue("$browserTabIndex", DbValue.Db(item.BrowserTabIndex));
-        command.Parameters.AddWithValue("$browserPinned", item.BrowserPinned ? 1 : 0);
-        command.Parameters.AddWithValue("$browserActive", item.BrowserActive ? 1 : 0);
-        command.Parameters.AddWithValue("$browserTabGroupId", DbValue.Db(item.BrowserTabGroupId));
-        command.Parameters.AddWithValue("$browserTabGroupTitle", DbValue.Db(item.BrowserTabGroupTitle));
-        command.Parameters.AddWithValue("$browserTabGroupColor", DbValue.Db(item.BrowserTabGroupColor));
-        command.Parameters.AddWithValue("$browserFaviconUrl", DbValue.Db(item.BrowserFaviconUrl));
-        command.Parameters.AddWithValue("$browserCapturedAt", DbValue.Db(DbValue.Time(item.BrowserCapturedAt)));
-        command.Parameters.AddWithValue("$browserLastOpenedAt", DbValue.Db(DbValue.Time(item.BrowserLastOpenedAt)));
     }
 
     private static Parcel ReadParcel(SqliteDataReader reader) => new()
@@ -516,19 +482,7 @@ VALUES($id,$parcel,$type,$name,$value,$identity,$detail,$created,$updated,$verif
         IconCacheKey = NullText(reader["IconCacheKey"]),
         NoteContent = NullText(reader["NoteContent"]),
         LaunchEnabled = Convert.ToInt32(reader["LaunchEnabled"]) == 1,
-        CloseSupported = Convert.ToInt32(reader["CloseSupported"]) == 1,
-        BrowserFamily = NullText(reader["BrowserFamily"]),
-        BrowserDomain = NullText(reader["BrowserDomain"]),
-        BrowserWindowGroupId = NullText(reader["BrowserWindowGroupId"]),
-        BrowserTabIndex = reader["BrowserTabIndex"] is DBNull ? null : Convert.ToInt32(reader["BrowserTabIndex"]),
-        BrowserPinned = Convert.ToInt32(reader["BrowserPinned"]) == 1,
-        BrowserActive = Convert.ToInt32(reader["BrowserActive"]) == 1,
-        BrowserTabGroupId = NullText(reader["BrowserTabGroupId"]),
-        BrowserTabGroupTitle = NullText(reader["BrowserTabGroupTitle"]),
-        BrowserTabGroupColor = NullText(reader["BrowserTabGroupColor"]),
-        BrowserFaviconUrl = NullText(reader["BrowserFaviconUrl"]),
-        BrowserCapturedAt = DbValue.NullableTime(reader["BrowserCapturedAt"]),
-        BrowserLastOpenedAt = DbValue.NullableTime(reader["BrowserLastOpenedAt"])
+        CloseSupported = Convert.ToInt32(reader["CloseSupported"]) == 1
     };
 
     private static TodayTask ReadTodayTask(SqliteDataReader reader) => new()

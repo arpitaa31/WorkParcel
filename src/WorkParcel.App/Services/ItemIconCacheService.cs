@@ -17,7 +17,7 @@ internal sealed class ItemIconCacheService
 
     public async Task TrySetAsync(ParcelItem item, Image image, CancellationToken cancellationToken = default)
     {
-        if (item.ItemType is ParcelItemType.Note or ParcelItemType.WebLink or ParcelItemType.BrowserTab) return;
+        if (item.ItemType is ParcelItemType.Note or ParcelItemType.WebLink) return;
         var sourcePath = item.ItemType is ParcelItemType.Application or ParcelItemType.ApplicationWindow ? item.ExecutablePath : item.Value;
         if (string.IsNullOrWhiteSpace(sourcePath)) return;
         var key = item.IconCacheKey ?? MakeKey(item, sourcePath); item.IconCacheKey = key; _paths.EnsureDirectories(); var cachePath = Path.Combine(_paths.IconCacheDirectory, key + ".thumb");

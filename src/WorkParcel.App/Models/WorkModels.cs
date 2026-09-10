@@ -36,8 +36,7 @@ public enum ParcelItemType
     File,
     Folder,
     WebLink,
-    Note,
-    BrowserTab
+    Note
 }
 
 public sealed class Parcel : BindableBase
@@ -69,8 +68,7 @@ public sealed class Parcel : BindableBase
             var bits = new List<string>();
             var apps = Items.Count(item => item.ItemType is ParcelItemType.Application or ParcelItemType.ApplicationWindow);
             AddCount(bits, apps, "APP");
-            AddCount(bits, Items.Count(item => item.ItemType == ParcelItemType.WebLink), "LINK");
-            AddCount(bits, Items.Count(item => item.ItemType == ParcelItemType.BrowserTab), "TAB");
+            AddCount(bits, Items.Count(item => item.ItemType == ParcelItemType.WebLink), "WEB LINK");
             AddCount(bits, Items.Count(item => item.ItemType == ParcelItemType.File), "FILE");
             AddCount(bits, Items.Count(item => item.ItemType == ParcelItemType.Folder), "FOLDER");
             AddCount(bits, Items.Count(item => item.ItemType == ParcelItemType.Note), "NOTE");
@@ -130,22 +128,6 @@ public sealed class ParcelItem : BindableBase
     public string? NoteContent { get; set; }
     public bool LaunchEnabled { get; set; } = true;
     public bool CloseSupported { get; set; }
-    public string? BrowserFamily { get; set; }
-    public string? BrowserDomain { get; set; }
-    public string? BrowserWindowGroupId { get; set; }
-    public int? BrowserTabIndex { get; set; }
-    public bool BrowserPinned { get; set; }
-    public bool BrowserActive { get; set; }
-    public string? BrowserTabGroupId { get; set; }
-    public string? BrowserTabGroupTitle { get; set; }
-    public string? BrowserTabGroupColor { get; set; }
-    public string? BrowserFaviconUrl { get; set; }
-    public DateTime? BrowserCapturedAt { get; set; }
-    public DateTime? BrowserLastOpenedAt { get; set; }
-    public string? BrowserSessionTabId { get; set; }
-    public string? BrowserSessionWindowId { get; set; }
-    public string? BrowserConnectionId { get; set; }
-
     // Current window identity only. Never written to the database.
     public nint RuntimeWindowHandle { get; set; }
     public uint RuntimeProcessId { get; set; }
@@ -154,10 +136,9 @@ public sealed class ParcelItem : BindableBase
     {
         ParcelItemType.ApplicationWindow => "APP WINDOW",
         ParcelItemType.WebLink => "WEB LINK",
-        ParcelItemType.BrowserTab => "BROWSER TAB",
         _ => ItemType.ToString().ToUpperInvariant()
     };
-    public string AvailabilityLabel => IsMissing ? "MISSING" : IsInaccessible ? "INACCESSIBLE" : HasChanged ? "CHANGED SINCE ATTACHED" : LaunchEnabled || ItemType is ParcelItemType.Note or ParcelItemType.BrowserTab ? "AVAILABLE" : "OPEN UNSUPPORTED";
+    public string AvailabilityLabel => IsMissing ? "MISSING" : IsInaccessible ? "INACCESSIBLE" : HasChanged ? "CHANGED SINCE ATTACHED" : LaunchEnabled || ItemType is ParcelItemType.Note ? "AVAILABLE" : "OPEN UNSUPPORTED";
 }
 
 public sealed class ParcelHistoryEntry

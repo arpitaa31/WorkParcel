@@ -36,25 +36,17 @@ internal static class Ui
     public static Border Tag(string value, string color) => new() { Child = Mono(value, 10, color, true), BorderBrush = Brush(color), BorderThickness = new Thickness(1), Padding = new Thickness(6, 3, 6, 3), CornerRadius = new CornerRadius(1) };
     public static Grid ItemIcon(ParcelItem item)
     {
-        UIElement fallbackContent;
-        if (item.ItemType == ParcelItemType.BrowserTab)
-        {
-            var browserLabel = item.BrowserFamily?.Equals("edge", StringComparison.OrdinalIgnoreCase) == true ? "EDG" : "CHR";
-            var domain = item.BrowserDomain ?? item.SecondaryDetail;
-            var domainInitial = string.IsNullOrWhiteSpace(domain) ? "•" : domain.Trim()[0].ToString().ToUpperInvariant();
-            var browserStack = Stack(0); browserStack.HorizontalAlignment = HorizontalAlignment.Center; browserStack.VerticalAlignment = VerticalAlignment.Center;
-            browserStack.Children.Add(Mono(browserLabel, 7, browserLabel == "EDG" ? "#67C7FF" : "#9BE28F", true));
-            browserStack.Children.Add(Mono(domainInitial, 12, "#E5EDF0", true));
-            fallbackContent = browserStack;
-            ToolTipService.SetToolTip(browserStack, $"{browserLabel} browser tab{(string.IsNullOrWhiteSpace(domain) ? string.Empty : $" · {domain}")}");
-        }
-        else
-        {
-            var label = item.ItemType switch { ParcelItemType.ApplicationWindow => "WIN", ParcelItemType.Application => "APP", ParcelItemType.File => "FILE", ParcelItemType.Folder => "DIR", ParcelItemType.WebLink => "URL", _ => "NOTE" };
-            var text = Mono(label, 8, item.IsMissing ? "#F0B45B" : null, true); text.HorizontalAlignment = HorizontalAlignment.Center; text.VerticalAlignment = VerticalAlignment.Center; fallbackContent = text;
-        }
-        var fallback = new Border { Width = 34, Height = 34, Background = Resource("SubtleSurfaceBrush"), BorderBrush = Resource("BorderBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(2), Child = fallbackContent };
-        var image = new Image { Width = 28, Height = 28, Stretch = Stretch.Uniform, Opacity = 0 }; var grid = new Grid { Width = 34, Height = 34 }; grid.Children.Add(fallback); grid.Children.Add(image); _ = Icons.TrySetAsync(item, image); return grid;
+        var label = item.ItemType switch { ParcelItemType.ApplicationWindow => "WIN", ParcelItemType.Application => "APP", ParcelItemType.File => "FILE", ParcelItemType.Folder => "DIR", ParcelItemType.WebLink => "URL", _ => "NOTE" };
+        var text = Mono(label, 8, item.IsMissing ? "#F0B45B" : null, true);
+        text.HorizontalAlignment = HorizontalAlignment.Center;
+        text.VerticalAlignment = VerticalAlignment.Center;
+        var fallback = new Border { Width = 34, Height = 34, Background = Resource("SubtleSurfaceBrush"), BorderBrush = Resource("BorderBrush"), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(2), Child = text };
+        var image = new Image { Width = 28, Height = 28, Stretch = Stretch.Uniform, Opacity = 0 };
+        var grid = new Grid { Width = 34, Height = 34 };
+        grid.Children.Add(fallback);
+        grid.Children.Add(image);
+        _ = Icons.TrySetAsync(item, image);
+        return grid;
     }
     public static T Interactive<T>(T element, float hoverScale = 1.008f) where T : FrameworkElement => InteractionMotion.Attach(element, hoverScale, .99f);
     public static async Task<ContentDialogResult> ShowDialog(ContentDialog dialog)

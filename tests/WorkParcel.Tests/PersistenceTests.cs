@@ -19,6 +19,12 @@ public sealed class PersistenceTests
         await connection.OpenAsync();
         await using var command = connection.CreateCommand(); command.CommandText = "SELECT Value FROM SchemaInfo WHERE Key='SchemaVersion';";
         Assert.Equal(DatabaseInitializer.CurrentSchemaVersion.ToString(), (await command.ExecuteScalarAsync())?.ToString());
+        await using var columnsCommand = connection.CreateCommand();
+        columnsCommand.CommandText = "PRAGMA table_info(ParcelItems);";
+        var columns = new List<string>();
+        await using var reader = await columnsCommand.ExecuteReaderAsync();
+        while (await reader.ReadAsync()) columns.Add(reader["name"].ToString()!);
+        Assert.DoesNotContain(columns, column => column.StartsWith("Browser", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
