@@ -1,55 +1,69 @@
 # WorkParcel
 
-### Save the work. Open it when you return.
+### Save your work. Open it whenever you return.
 
-WorkParcel saves the apps, files, folders and web links connected to a task, lets you pack that setup away, and reopen it later.
+I started making WorkParcel because reopening the same apps, files, folders and links every time I return to a project gets annoying.
+
+WorkParcel lets you save everything connected to a task inside one parcel. Later, you can open that parcel and quickly get back to your work.
 
 ## Download
 
-WorkParcel 0.2.0 Beta 3 is a public beta for Windows 10/11 x64. Download the installer, portable build, and release checksums from the GitHub Releases page.
+WorkParcel `v0.2.0-beta.3` is available for Windows 10/11 (x64).
 
-The installer and portable build include the .NET runtime and Windows App SDK dependencies, so WorkParcel launches without VS Code, the .NET SDK, or dotnet run.
+Download the installer from the GitHub Releases page:
+
+`WorkParcel-Setup-0.2.0-beta.3.exe`
+
+The required .NET and Windows App SDK files are already included, so you do not need VS Code or the .NET SDK to use the app.
+
+A portable ZIP is also available if you do not want to install it.
 
 ## How it works
 
-1. Create a parcel and give it a name.
-2. Capture the open apps and windows, files and folders, and web links that belong to the task.
-3. Create the parcel. Everything stays open and external files and folders are not moved or copied.
-4. Open the parcel later and choose which saved items to launch. Apps use their saved executable; web links open in the Windows default browser.
-5. Pack Away saves the selected records and can request a normal close for selected whole application windows.
+1. Create a new parcel.
+2. Select the apps, windows, files and folders connected to your work.
+3. Add any useful web links.
+4. Save the parcel. Your current setup will remain open.
+5. Use **Pack Away** when you want to close the selected supported windows.
+6. Use **Open Parcel** whenever you want to reopen the setup.
 
-Capture Current Setup is organized into OPEN APPS, FILES & FOLDERS, and WEB LINKS. A web-link entry accepts one HTTP or HTTPS URL per line. Blank lines are ignored, invalid lines are shown for correction, and duplicate URLs are not added. WorkParcel validates and stores the URL; it does not fetch the page.
+Web links open in your default browser. WorkParcel does not automatically save or close individual Chrome or Edge tabs.
 
-## Main features
+## Features
 
-- Save and reopen apps, whole application windows, files, folders, web links, and notes.
-- Add, edit, remove, and relink saved records without changing the original resources.
-- Check availability and accept changed file versions.
-- Pack away only the whole windows you select. WorkParcel never closes an individual browser tab or uses saved links to close a browser.
-- Track Today tasks, archive parcels, restore them from Archive, create local SQLite backups, and use System, Light, or Dark themes.
+- Create and manage different parcels
+- Capture currently open apps and windows
+- Add files, folders and web links
+- Open saved parcel items again
+- Pack away selected application windows
+- Add a to-do list to a particular parcel
+- Edit and remove individual saved items
+- Archive parcels that are no longer needed
+- Restore archived parcels
+- Search through saved parcels
+- System, Light and Dark themes
+- Local SQLite storage
 
-If you select a Chrome or Edge window in OPEN APPS, Pack Away may close that entire selected window, including its tabs. WorkParcel does not claim to preserve browser sessions, tab history, tab groups, page contents, or exact window positions.
+Removing an item from a parcel only removes its WorkParcel record. The original file, folder or application is never deleted.
 
-## Safety and privacy
+## Privacy and safety
 
-WorkParcel keeps data on the user's computer. It does not move, copy, or delete real files or folders. Removing an item removes only its WorkParcel record. Close requests are normal Windows close messages; WorkParcel does not force-kill applications or bypass unsaved-work prompts. Web links are ordinary saved URLs and are opened only when you choose to open them.
+All WorkParcel data stays locally on your computer.
 
-## Beta status and bug reports
+WorkParcel does not upload your parcels or copy your real files. It also uses normal Windows close requests instead of forcefully killing applications, so apps can still show their usual unsaved-work warning.
 
-This is a public beta. Report reproducible bugs, compatibility problems, and feature feedback through GitHub Issues. Do not include private parcel contents, database files, credentials, tokens, or logs containing personal paths in an issue.
+## Beta version
+
+This is still a public beta, so there may be a few bugs or compatibility issues.
+
+If you find a problem, please report it through GitHub Issues. Do not upload personal parcel data, database files, passwords, tokens or private file paths.
 
 ## Run from source
 
 You need Windows and the .NET 10 SDK.
 
-    dotnet restore .\WorkParcel.slnx
-    dotnet build .\WorkParcel.slnx
-    dotnet test .\WorkParcel.slnx
-    dotnet run --project .\src\WorkParcel.App\WorkParcel.App.csproj --no-restore -p:WindowsPackageType=None -p:EnableMsixTooling=false -p:EnableWinAppRunSupport=false
-
-## Built with
-
-- C# and .NET 10
-- WinUI 3 and Windows App SDK
-- SQLite
-- Win32 APIs for application-window detection and safe whole-window close requests
+```powershell
+dotnet restore .\WorkParcel.slnx
+dotnet build .\WorkParcel.slnx
+dotnet test .\WorkParcel.slnx
+dotnet run --project .\src\WorkParcel.App\WorkParcel.App.csproj --no-restore -p:WindowsPackageType=None -p:EnableMsixTooling=false -p:EnableWinAppRunSupport=false
